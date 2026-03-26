@@ -219,13 +219,13 @@
 									</div>
 									<div>
 										<label class="block text-xs font-medium text-gray-400 mb-1">Distance (km)</label>
-										<input type="number" id="run-distance" step="0.1" min="0" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="5.0" />
+										<input type="text" inputmode="decimal" id="run-distance" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="5.0" pattern="[0-9]+([.,][0-9]*)?" />
 									</div>
 								</div>
 								<div class="grid grid-cols-2 gap-3">
 									<div>
-										<label class="block text-xs font-medium text-gray-400 mb-1">Duration (min)</label>
-										<input type="number" id="run-duration" min="0" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="30" />
+										<label class="block text-xs font-medium text-gray-400 mb-1">Duration (mm:ss)</label>
+										<input type="text" inputmode="numeric" id="run-duration" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="30:00" pattern="[0-9]+:[0-5][0-9]" />
 									</div>
 									<div>
 										<label class="block text-xs font-medium text-gray-400 mb-1">Effort (1-10)</label>
@@ -273,15 +273,15 @@
 							<button onclick="openSettings()" class="bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition glow-sm">Open Settings</button>
 						</div>
 						<div id="coach-chat" class="hidden card p-4 flex flex-col" style="max-height: calc(100vh - 200px)">
-							<div id="chat-messages" class="space-y-3 mb-4 overflow-y-auto flex-1" style="overscroll-behavior: contain"></div>
+							<form onsubmit="sendMessage(event)" class="flex gap-2 items-end flex-shrink-0 mb-3">
+								<textarea id="chat-input" rows="1" class="flex-1 rounded-xl px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none resize-none" style="max-height: calc(1.25rem * 4 + 1rem); background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1)" placeholder="Ask your coach anything..." oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'" onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();this.closest('form').requestSubmit()}"></textarea>
+								<button type="submit" class="bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition glow-sm">Send</button>
+							</form>
 							<div id="chat-typing" class="hidden text-sm text-gray-400 mb-3 flex items-center gap-2">
 								<div class="spinner"></div>
 								Coach is thinking...
 							</div>
-							<form onsubmit="sendMessage(event)" class="flex gap-2 flex-shrink-0">
-								<input type="text" id="chat-input" class="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="Ask your coach anything..." />
-								<button type="submit" class="bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition glow-sm">Send</button>
-							</form>
+							<div id="chat-messages" class="space-y-3 overflow-y-auto flex-1" style="overscroll-behavior: contain"></div>
 						</div>
 					</div>
 				</div>
@@ -459,6 +459,14 @@
 
 			let APP = loadData()
 
+			// Migrate old duration format (minutes → seconds)
+			if (!APP._durationInSeconds && APP.runLog.length > 0) {
+				APP.runLog.forEach((r) => { r.duration = r.duration * 60 })
+				APP._durationInSeconds = true
+				saveData(APP)
+			}
+			APP._durationInSeconds = true
+
 			// ============================================================
 			// TRAINING PLAN GENERATOR (Dynamic)
 			// ============================================================
@@ -597,8 +605,8 @@
 						`\nRecent runs:\n` +
 						recentRuns
 							.map((r) => {
-								const pace = r.duration && r.distance ? (r.duration / r.distance).toFixed(1) : "?"
-								return `${r.date}: ${r.distance}km in ${r.duration}min (${pace} min/km, effort ${r.effort}/10)`
+								const pace = r.duration && r.distance ? formatDuration(Math.round(r.duration / r.distance)) : "?"
+								return `${r.date}: ${r.distance}km in ${formatDuration(r.duration)} (${pace} /km, effort ${r.effort}/10)`
 							})
 							.join("\n")
 				}
@@ -961,13 +969,24 @@ RULES:
 			// ============================================================
 			// LOG TAB
 			// ============================================================
+			function parseDuration(val) {
+				const parts = val.split(":")
+				return parseInt(parts[0]) * 60 + parseInt(parts[1])
+			}
+
+			function formatDuration(totalSeconds) {
+				const m = Math.floor(totalSeconds / 60)
+				const s = totalSeconds % 60
+				return `${m}:${String(s).padStart(2, "0")}`
+			}
+
 			function logRun(e) {
 				e.preventDefault()
 				const run = {
 					id: Date.now(),
 					date: document.getElementById("run-date").value,
-					distance: parseFloat(document.getElementById("run-distance").value),
-					duration: parseInt(document.getElementById("run-duration").value),
+					distance: parseFloat(document.getElementById("run-distance").value.replace(",", ".")),
+					duration: parseDuration(document.getElementById("run-duration").value),
 					effort: parseInt(document.getElementById("run-effort").value),
 					notes: document.getElementById("run-notes").value.trim(),
 				}
@@ -1011,15 +1030,16 @@ RULES:
 				const container = document.getElementById("run-history")
 				container.innerHTML = runs
 					.map((r) => {
-						const pace = r.duration && r.distance ? (r.duration / r.distance).toFixed(1) : "-"
+						const paceSeconds = r.duration && r.distance ? Math.round(r.duration / r.distance) : null
+						const pace = paceSeconds ? formatDuration(paceSeconds) : "-"
 						const dateStr = new Date(r.date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
 						return `
       <div class="flex items-center gap-3 py-2 border-b border-white/5 last:border-0">
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2">
             <span class="text-sm font-medium text-white">${r.distance} km</span>
-            <span class="text-xs text-gray-400">${r.duration} min</span>
-            <span class="text-xs text-gray-400">${pace} min/km</span>
+            <span class="text-xs text-gray-400">${formatDuration(r.duration)}</span>
+            <span class="text-xs text-gray-400">${pace} /km</span>
           </div>
           <div class="flex items-center gap-2 mt-0.5">
             <span class="text-xs text-gray-400">${dateStr}</span>
@@ -1105,7 +1125,8 @@ RULES:
 
 			function renderChatMessages() {
 				const container = document.getElementById("chat-messages")
-				container.innerHTML = APP.chatHistory
+				container.innerHTML = [...APP.chatHistory]
+					.reverse()
 					.map(
 						(msg) => `
     <div class="${msg.role === "user" ? "chat-msg-user ml-8" : "chat-msg-ai mr-8"} rounded-xl px-4 py-3 text-sm text-gray-300">
@@ -1115,7 +1136,7 @@ RULES:
   `,
 					)
 					.join("")
-				container.scrollTop = container.scrollHeight
+				container.scrollTop = 0
 			}
 
 			function formatMarkdown(text) {
@@ -1224,8 +1245,8 @@ RULES:
 				if (recentRuns.length > 0) {
 					ctx += `\nRECENT RUNS (last 14 days):\n`
 					recentRuns.forEach((r) => {
-						const pace = r.duration && r.distance ? (r.duration / r.distance).toFixed(1) : "?"
-						ctx += `${r.date}: ${r.distance}km in ${r.duration}min (${pace} min/km, effort ${r.effort}/10)${r.notes ? " - " + r.notes : ""}\n`
+						const pace = r.duration && r.distance ? formatDuration(Math.round(r.duration / r.distance)) : "?"
+						ctx += `${r.date}: ${r.distance}km in ${formatDuration(r.duration)} (${pace} /km, effort ${r.effort}/10)${r.notes ? " - " + r.notes : ""}\n`
 					})
 				}
 
@@ -1241,6 +1262,7 @@ RULES:
 				APP.chatHistory.push({ role: "user", content: msg })
 				saveData(APP)
 				input.value = ""
+				input.style.height = "auto"
 				renderChatMessages()
 
 				document.getElementById("chat-typing").classList.remove("hidden")
