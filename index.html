@@ -29,11 +29,11 @@
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
-<body class="bg-gray-50 min-h-screen">
+<body class="bg-gray-200 min-h-screen">
 
   <!-- Header -->
   <header class="bg-white shadow-sm sticky top-0 z-50">
-    <div class="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <span class="text-2xl">🏃</span>
         <h1 class="text-xl font-bold text-gray-800">RunTracker</h1>
@@ -44,97 +44,118 @@
       </button>
     </div>
     <!-- Tabs -->
-    <div class="max-w-2xl mx-auto px-4 flex gap-0">
+    <div class="max-w-6xl mx-auto px-4 flex gap-0">
       <button onclick="switchTab('plan')" id="tab-plan" class="flex-1 py-2 text-sm text-center text-gray-500 hover:text-gray-700 border-b-3 border-transparent tab-active">Plan</button>
       <button onclick="switchTab('log')" id="tab-log" class="flex-1 py-2 text-sm text-center text-gray-500 hover:text-gray-700 border-b-3 border-transparent">Log</button>
-      <button onclick="switchTab('coach')" id="tab-coach" class="flex-1 py-2 text-sm text-center text-gray-500 hover:text-gray-700 border-b-3 border-transparent">Coach</button>
+      <button onclick="switchTab('coach')" id="tab-coach" class="lg:hidden flex-1 py-2 text-sm text-center text-gray-500 hover:text-gray-700 border-b-3 border-transparent">Coach</button>
     </div>
   </header>
 
   <!-- Main Content -->
-  <main class="max-w-2xl mx-auto px-4 py-4 pb-24">
+  <main class="max-w-6xl mx-auto px-4 py-4 pb-24">
+    <div class="lg:flex lg:gap-6">
 
-    <!-- ==================== PLAN TAB ==================== -->
-    <div id="view-plan" class="fade-in">
-      <div class="flex items-center justify-between mb-4">
-        <div>
-          <h2 class="text-lg font-semibold text-gray-800">Training Plan</h2>
-          <p id="plan-subtitle" class="text-sm text-gray-500"></p>
-        </div>
-        <div class="flex gap-2">
-          <span id="plan-progress-badge" class="text-xs bg-brand-100 text-brand-700 px-2 py-1 rounded-full font-medium"></span>
-        </div>
-      </div>
-      <div id="plan-weeks" class="space-y-2"></div>
-    </div>
-
-    <!-- ==================== LOG TAB ==================== -->
-    <div id="view-log" class="hidden fade-in">
-      <!-- Log Form -->
-      <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
-        <h2 class="text-lg font-semibold text-gray-800 mb-3">Log a Run</h2>
-        <form id="log-form" onsubmit="logRun(event)" class="space-y-3">
-          <div class="grid grid-cols-2 gap-3">
+      <!-- Left Column: Plan / Log -->
+      <div class="lg:flex-1 lg:min-w-0">
+        <!-- ==================== PLAN TAB ==================== -->
+        <div id="view-plan" class="fade-in">
+          <div class="flex items-center justify-between mb-4">
             <div>
-              <label class="block text-xs font-medium text-gray-500 mb-1">Date</label>
-              <input type="date" id="run-date" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none">
+              <h2 class="text-lg font-semibold text-gray-800">Training Plan</h2>
+              <p id="plan-subtitle" class="text-sm text-gray-500"></p>
             </div>
-            <div>
-              <label class="block text-xs font-medium text-gray-500 mb-1">Distance (km)</label>
-              <input type="number" id="run-distance" step="0.1" min="0" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="5.0">
+            <div class="flex gap-2">
+              <span id="plan-progress-badge" class="text-xs bg-brand-100 text-brand-700 px-2 py-1 rounded-full font-medium"></span>
             </div>
           </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="block text-xs font-medium text-gray-500 mb-1">Duration (min)</label>
-              <input type="number" id="run-duration" min="0" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="30">
+          <div id="plan-generate-prompt" class="hidden bg-white rounded-xl shadow-sm p-6 text-center mb-4">
+            <span class="text-3xl block mb-2">📋</span>
+            <h3 class="font-semibold text-gray-700 mb-1">Generate Your Training Plan</h3>
+            <p id="generate-prompt-text" class="text-sm text-gray-500 mb-4"></p>
+            <div class="flex gap-2 justify-center">
+              <button onclick="triggerGeneratePlan(true)" id="btn-ai-plan" class="hidden bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">Generate with AI Coach</button>
+              <button onclick="triggerGeneratePlan(false)" class="border border-gray-300 hover:bg-gray-50 text-sm font-medium px-4 py-2 rounded-lg transition">Generate Default Plan</button>
             </div>
-            <div>
-              <label class="block text-xs font-medium text-gray-500 mb-1">Effort (1-10)</label>
-              <input type="range" id="run-effort" min="1" max="10" value="5" class="w-full mt-2" oninput="document.getElementById('effort-val').textContent=this.value">
-              <div class="text-xs text-gray-400 text-center">Level: <span id="effort-val">5</span>/10</div>
-            </div>
+            <div id="plan-generating" class="hidden mt-3 flex items-center justify-center gap-2 text-sm text-gray-500"><div class="spinner"></div> AI Coach is building your plan...</div>
           </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
-            <input type="text" id="run-notes" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="How did it feel?">
-          </div>
-          <button type="submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-2 rounded-lg text-sm transition">Save Run</button>
-        </form>
-      </div>
-
-      <!-- Weekly Mileage Chart -->
-      <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
-        <h3 class="text-sm font-semibold text-gray-700 mb-3">Weekly Mileage</h3>
-        <div id="mileage-chart" class="flex items-end gap-1 h-32"></div>
-      </div>
-
-      <!-- Run History -->
-      <div class="bg-white rounded-xl shadow-sm p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-semibold text-gray-700">Run History</h3>
-          <span id="total-stats" class="text-xs text-gray-400"></span>
+          <div id="plan-weeks" class="space-y-2"></div>
         </div>
-        <div id="run-history" class="space-y-2"></div>
-        <p id="no-runs" class="text-sm text-gray-400 text-center py-4">No runs logged yet. Get out there! 💪</p>
-      </div>
-    </div>
 
-    <!-- ==================== COACH TAB ==================== -->
-    <div id="view-coach" class="hidden fade-in">
-      <div id="coach-no-key" class="text-center py-12">
-        <span class="text-4xl mb-3 block">🤖</span>
-        <h3 class="font-semibold text-gray-700 mb-1">AI Running Coach</h3>
-        <p class="text-sm text-gray-500 mb-4">Set your Claude API key in Settings to chat with your coach.</p>
-        <button onclick="openSettings()" class="bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">Open Settings</button>
+        <!-- ==================== LOG TAB ==================== -->
+        <div id="view-log" class="hidden fade-in">
+          <!-- Log Form -->
+          <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+            <h2 class="text-lg font-semibold text-gray-800 mb-3">Log a Run</h2>
+            <form id="log-form" onsubmit="logRun(event)" class="space-y-3">
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-gray-500 mb-1">Date</label>
+                  <input type="date" id="run-date" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none">
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-500 mb-1">Distance (km)</label>
+                  <input type="number" id="run-distance" step="0.1" min="0" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="5.0">
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-gray-500 mb-1">Duration (min)</label>
+                  <input type="number" id="run-duration" min="0" required class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="30">
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-500 mb-1">Effort (1-10)</label>
+                  <input type="range" id="run-effort" min="1" max="10" value="5" class="w-full mt-2" oninput="document.getElementById('effort-val').textContent=this.value">
+                  <div class="text-xs text-gray-400 text-center">Level: <span id="effort-val">5</span>/10</div>
+                </div>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Notes (optional)</label>
+                <input type="text" id="run-notes" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="How did it feel?">
+              </div>
+              <button type="submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-2 rounded-lg text-sm transition">Save Run</button>
+            </form>
+          </div>
+
+          <!-- Weekly Mileage Chart -->
+          <div class="bg-white rounded-xl shadow-sm p-4 mb-4">
+            <h3 class="text-sm font-semibold text-gray-700 mb-3">Weekly Mileage</h3>
+            <div id="mileage-chart" class="flex items-end gap-1 h-32"></div>
+          </div>
+
+          <!-- Run History -->
+          <div class="bg-white rounded-xl shadow-sm p-4">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-semibold text-gray-700">Run History</h3>
+              <span id="total-stats" class="text-xs text-gray-400"></span>
+            </div>
+            <div id="run-history" class="space-y-2"></div>
+            <p id="no-runs" class="text-sm text-gray-400 text-center py-4">No runs logged yet. Get out there! 💪</p>
+          </div>
+        </div>
       </div>
-      <div id="coach-chat" class="hidden">
-        <div id="chat-messages" class="space-y-3 mb-4"></div>
-        <div id="chat-typing" class="hidden text-sm text-gray-400 mb-3 flex items-center gap-2"><div class="spinner"></div> Coach is thinking...</div>
-        <form onsubmit="sendMessage(event)" class="flex gap-2">
-          <input type="text" id="chat-input" class="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="Ask your coach anything...">
-          <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Send</button>
-        </form>
+
+      <!-- Right Column: Coach (always visible on desktop, tab on mobile) -->
+      <div id="view-coach" class="hidden lg:block lg:w-[420px] lg:flex-shrink-0 fade-in">
+        <div class="lg:sticky lg:top-24">
+          <div class="hidden lg:flex items-center justify-between mb-3">
+            <h2 class="text-lg font-semibold text-gray-800">Coach</h2>
+            <button onclick="clearChat()" class="text-xs text-gray-400 hover:text-red-400 transition" title="Clear chat">Clear</button>
+          </div>
+          <div id="coach-no-key" class="text-center py-12 bg-white rounded-xl shadow-sm">
+            <span class="text-4xl mb-3 block">🤖</span>
+            <h3 class="font-semibold text-gray-700 mb-1">AI Running Coach</h3>
+            <p class="text-sm text-gray-500 mb-4">Set your Claude API key in Settings to chat with your coach.</p>
+            <button onclick="openSettings()" class="bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">Open Settings</button>
+          </div>
+          <div id="coach-chat" class="hidden bg-white rounded-xl shadow-sm p-4 flex flex-col" style="max-height: calc(100vh - 140px);">
+            <div id="chat-messages" class="space-y-3 mb-4 overflow-y-auto flex-1"></div>
+            <div id="chat-typing" class="hidden text-sm text-gray-400 mb-3 flex items-center gap-2"><div class="spinner"></div> Coach is thinking...</div>
+            <form onsubmit="sendMessage(event)" class="flex gap-2 flex-shrink-0">
+              <input type="text" id="chat-input" class="flex-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="Ask your coach anything...">
+              <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Send</button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   </main>
@@ -147,15 +168,21 @@
         <button onclick="closeSettings()" class="text-gray-400 hover:text-gray-600">&times;</button>
       </div>
       <div class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Plan Start Date</label>
-          <input type="date" id="setting-start-date" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none">
-          <p class="text-xs text-gray-400 mt-1">When your training starts. Race is ~29 weeks later.</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+            <input type="date" id="setting-start-date" onchange="updateWeekCount()" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Race Date</label>
+            <input type="date" id="setting-race-date" onchange="updateWeekCount()" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none">
+          </div>
         </div>
+        <p id="week-count-hint" class="text-xs text-gray-400 -mt-2"></p>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Claude API Key</label>
           <input type="password" id="setting-api-key" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none font-mono" placeholder="sk-ant-...">
-          <p class="text-xs text-gray-400 mt-1">Stored locally in your browser only.</p>
+          <p class="text-xs text-gray-400 mt-1">Stored locally. Enables AI coach and smart plan generation.</p>
         </div>
         <hr>
         <div>
@@ -168,8 +195,9 @@
             </label>
           </div>
         </div>
-        <div>
-          <button onclick="resetAllData()" class="w-full border border-red-300 text-red-600 hover:bg-red-50 text-sm font-medium py-2 rounded-lg transition">Reset All Data</button>
+        <div class="flex gap-2">
+          <button onclick="regeneratePlan()" class="flex-1 border border-amber-300 text-amber-600 hover:bg-amber-50 text-sm font-medium py-2 rounded-lg transition">Regenerate Plan</button>
+          <button onclick="resetAllData()" class="flex-1 border border-red-300 text-red-600 hover:bg-red-50 text-sm font-medium py-2 rounded-lg transition">Reset All Data</button>
         </div>
       </div>
       <button onclick="saveSettings()" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-2 rounded-lg text-sm mt-4 transition">Save Settings</button>
@@ -184,138 +212,216 @@
 // DATA LAYER
 // ============================================================
 const STORAGE_KEY = 'runtracker_data';
+const DB_NAME = 'RunTrackerDB';
+const DB_VERSION = 1;
+const DB_STORE = 'appdata';
 
-function loadData() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (raw) return JSON.parse(raw);
+function defaultData() {
   return {
-    settings: { startDate: '2026-03-30', apiKey: '' },
+    settings: { startDate: '2026-03-23', raceDate: '2026-10-18', apiKey: '' },
     runLog: [],
     chatHistory: [],
-    completedWorkouts: {} // key: "week-day" → true
+    completedWorkouts: {},
+    _updatedAt: Date.now()
   };
 }
 
+// --- localStorage (fast, synchronous) ---
+function loadFromLS() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function saveToLS(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+}
+
+// --- IndexedDB (durable, async) ---
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(DB_STORE)) {
+        db.createObjectStore(DB_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function loadFromIDB() {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DB_STORE, 'readonly');
+      const store = tx.objectStore(DB_STORE);
+      const req = store.get('app');
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch { return null; }
+}
+
+async function saveToIDB(data) {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).put(data, 'app');
+  } catch {}
+}
+
+// --- Unified load/save ---
+function loadData() {
+  const ls = loadFromLS();
+  return ls || defaultData();
+}
+
 function saveData(data) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  data._updatedAt = Date.now();
+  saveToLS(data);
+  saveToIDB(data); // async fire-and-forget
+}
+
+// On startup: reconcile LS vs IDB, keep the most recent
+async function reconcileData() {
+  const idb = await loadFromIDB();
+  if (!idb) {
+    // First run or IDB empty — seed it from current state
+    await saveToIDB(APP);
+    return;
+  }
+  const lsTime = APP._updatedAt || 0;
+  const idbTime = idb._updatedAt || 0;
+  if (idbTime > lsTime) {
+    // IDB has newer data (e.g. localStorage was cleared)
+    Object.assign(APP, idb);
+    saveToLS(APP);
+    showToast('Data restored from backup');
+    switchTab('plan');
+  } else {
+    await saveToIDB(APP);
+  }
 }
 
 let APP = loadData();
 
 // ============================================================
-// TRAINING PLAN GENERATOR
+// TRAINING PLAN GENERATOR (Dynamic)
 // ============================================================
-function generatePlan() {
+function getTotalWeeks() {
+  if (!APP.settings.startDate || !APP.settings.raceDate) return 0;
+  const start = toMonday(localDate(APP.settings.startDate));
+  const race = localDate(APP.settings.raceDate);
+  const diff = Math.round((race - start) / (7 * 24 * 60 * 60 * 1000));
+  return Math.max(1, Math.ceil(diff / 1) ); // weeks = ceil of day diff / 7... actually let's do it right
+}
+
+// Calculate weeks between start and race
+function calcWeeksBetween(startStr, raceStr) {
+  if (!startStr || !raceStr) return 0;
+  const start = toMonday(localDate(startStr));
+  const race = localDate(raceStr);
+  return Math.max(1, Math.ceil((race - start) / (7 * 24 * 60 * 60 * 1000)));
+}
+
+function generateDefaultPlan(numWeeks) {
+  if (numWeeks < 4) numWeeks = 4;
   const plan = [];
 
-  // Weeks 1-8: Base building (3 runs/week)
-  const baseDistances = [
-    { long: 3, easy: [2, 2] },
-    { long: 3.5, easy: [2, 2.5] },
-    { long: 4, easy: [2.5, 2.5] },
-    { long: 5, easy: [3, 2.5] },
-    { long: 5, easy: [3, 3] },
-    { long: 6, easy: [3, 3] },
-    { long: 7, easy: [3.5, 3] },
-    { long: 8, easy: [3.5, 3.5] },
-  ];
-  for (let i = 0; i < 8; i++) {
-    const b = baseDistances[i];
+  // Allocate phases proportionally
+  const raceWeeks = 1;
+  const remaining = numWeeks - raceWeeks;
+  const taperWeeks = Math.max(1, Math.round(remaining * 0.10));
+  const baseWeeks = Math.max(2, Math.round(remaining * 0.30));
+  const peakWeeks = Math.max(1, Math.round(remaining * 0.25));
+  const buildWeeks = Math.max(1, remaining - baseWeeks - peakWeeks - taperWeeks);
+
+  let w = 1;
+
+  // Helper: linearly interpolate distance
+  const lerp = (min, max, t) => Math.round((min + (max - min) * t) * 10) / 10;
+
+  // BASE BUILDING: 3 runs/week, long run 3→8km
+  for (let i = 0; i < baseWeeks; i++) {
+    const t = baseWeeks === 1 ? 1 : i / (baseWeeks - 1);
+    const long = lerp(3, 8, t);
+    const easy = lerp(2, 3.5, t);
     plan.push({
-      week: i + 1,
-      phase: 'Base Building',
+      week: w++, phase: 'Base Building',
       days: [
-        { day: 'Tue', type: 'Easy Run', distance: b.easy[0], notes: 'Comfortable pace, conversational' },
-        { day: 'Thu', type: 'Easy Run', distance: b.easy[1], notes: 'Comfortable pace' },
-        { day: 'Sun', type: 'Long Run', distance: b.long, notes: 'Slow and steady, build endurance' },
+        { day: 'Tue', type: 'Easy Run', distance: easy, notes: 'Comfortable pace, conversational' },
+        { day: 'Thu', type: 'Easy Run', distance: easy, notes: 'Comfortable pace' },
+        { day: 'Sun', type: 'Long Run', distance: long, notes: 'Slow and steady, build endurance' },
       ]
     });
   }
 
-  // Weeks 9-16: Building volume (4 runs/week, add tempo/intervals)
-  const buildDistances = [
-    { long: 9, easy: [4, 3], quality: { type: 'Tempo Run', dist: 4, notes: '10 min warm-up, 15 min tempo, 10 min cool-down' } },
-    { long: 10, easy: [4, 3.5], quality: { type: 'Intervals', dist: 5, notes: '6×400m fast with 200m jog recovery' } },
-    { long: 10, easy: [4.5, 3.5], quality: { type: 'Tempo Run', dist: 5, notes: '10 min warm-up, 20 min tempo, 10 min cool-down' } },
-    { long: 11, easy: [4.5, 4], quality: { type: 'Intervals', dist: 5, notes: '4×800m fast with 400m jog recovery' } },
-    { long: 12, easy: [5, 4], quality: { type: 'Tempo Run', dist: 5, notes: '10 min warm-up, 25 min tempo, 10 min cool-down' } },
-    { long: 13, easy: [5, 4], quality: { type: 'Intervals', dist: 6, notes: '5×800m fast with 400m jog recovery' } },
-    { long: 13, easy: [5, 4.5], quality: { type: 'Tempo Run', dist: 6, notes: '10 min warm-up, 30 min tempo, 10 min cool-down' } },
-    { long: 14, easy: [5, 4.5], quality: { type: 'Intervals', dist: 6, notes: '3×1600m at race pace with 800m jog recovery' } },
-  ];
-  for (let i = 0; i < 8; i++) {
-    const b = buildDistances[i];
+  // BUILDING VOLUME: 4 runs/week, long run 9→14km, add quality sessions
+  for (let i = 0; i < buildWeeks; i++) {
+    const t = buildWeeks === 1 ? 1 : i / (buildWeeks - 1);
+    const long = lerp(9, 14, t);
+    const easy = lerp(4, 5, t);
+    const qualDist = lerp(4, 6, t);
+    const isInterval = i % 2 === 1;
     plan.push({
-      week: i + 9,
-      phase: 'Building Volume',
+      week: w++, phase: 'Building Volume',
       days: [
-        { day: 'Tue', type: 'Easy Run', distance: b.easy[0], notes: 'Comfortable pace' },
-        { day: 'Wed', type: b.quality.type, distance: b.quality.dist, notes: b.quality.notes },
-        { day: 'Fri', type: 'Easy Run', distance: b.easy[1], notes: 'Recovery pace' },
-        { day: 'Sun', type: 'Long Run', distance: b.long, notes: 'Steady, controlled effort' },
+        { day: 'Tue', type: 'Easy Run', distance: easy, notes: 'Comfortable pace' },
+        { day: 'Wed', type: isInterval ? 'Intervals' : 'Tempo Run', distance: qualDist,
+          notes: isInterval ? `${Math.round(3 + t * 3)}×800m fast with 400m jog recovery` : `10 min warm-up, ${Math.round(15 + t * 15)} min tempo, 10 min cool-down` },
+        { day: 'Fri', type: 'Easy Run', distance: lerp(3, 4.5, t), notes: 'Recovery pace' },
+        { day: 'Sun', type: 'Long Run', distance: long, notes: 'Steady, controlled effort' },
       ]
     });
   }
 
-  // Weeks 17-24: Peak training (4 runs/week, longer long runs, race pace work)
-  const peakDistances = [
-    { long: 15, easy: [5, 5], quality: { type: 'Race Pace', dist: 6, notes: '2km warm-up, 3km at race pace, 1km cool-down' } },
-    { long: 16, easy: [5, 5], quality: { type: 'Tempo Run', dist: 7, notes: '10 min warm-up, 35 min tempo, 10 min cool-down' } },
-    { long: 16, easy: [5.5, 5], quality: { type: 'Intervals', dist: 7, notes: '6×800m fast with 400m jog' } },
-    { long: 17, easy: [5.5, 5], quality: { type: 'Race Pace', dist: 8, notes: '2km warm-up, 5km at race pace, 1km cool-down' } },
-    { long: 18, easy: [6, 5], quality: { type: 'Tempo Run', dist: 7, notes: '10 min warm-up, 35 min tempo, 10 min cool-down' } },
-    { long: 18, easy: [6, 5.5], quality: { type: 'Intervals', dist: 8, notes: '4×1600m at race pace with 800m jog' } },
-    { long: 19, easy: [6, 5.5], quality: { type: 'Race Pace', dist: 8, notes: '2km warm-up, 6km at race pace' } },
-    { long: 19, easy: [5.5, 5], quality: { type: 'Tempo Run', dist: 7, notes: '10 min warm-up, 30 min tempo, 10 min cool-down' } },
-  ];
-  for (let i = 0; i < 8; i++) {
-    const b = peakDistances[i];
+  // PEAK TRAINING: 4 runs/week, long run 15→19km, race pace work
+  for (let i = 0; i < peakWeeks; i++) {
+    const t = peakWeeks === 1 ? 1 : i / (peakWeeks - 1);
+    const long = lerp(15, 19, t);
+    const easy = lerp(5, 6, t);
+    const qualDist = lerp(6, 8, t);
+    const types = ['Race Pace', 'Tempo Run', 'Intervals'];
+    const qType = types[i % 3];
+    const notes = qType === 'Race Pace' ? `2km warm-up, ${Math.round(3 + t * 3)}km at race pace, 1km cool-down`
+      : qType === 'Intervals' ? `${Math.round(4 + t * 2)}×800m at race pace with 400m jog`
+      : `10 min warm-up, ${Math.round(25 + t * 10)} min tempo, 10 min cool-down`;
     plan.push({
-      week: i + 17,
-      phase: 'Peak Training',
+      week: w++, phase: 'Peak Training',
       days: [
-        { day: 'Tue', type: 'Easy Run', distance: b.easy[0], notes: 'Keep it easy' },
-        { day: 'Wed', type: b.quality.type, distance: b.quality.dist, notes: b.quality.notes },
-        { day: 'Fri', type: 'Easy Run', distance: b.easy[1], notes: 'Recovery pace' },
-        { day: 'Sun', type: 'Long Run', distance: b.long, notes: 'Build mental toughness, stay relaxed' },
+        { day: 'Tue', type: 'Easy Run', distance: easy, notes: 'Keep it easy' },
+        { day: 'Wed', type: qType, distance: qualDist, notes: notes },
+        { day: 'Fri', type: 'Easy Run', distance: lerp(4, 5.5, t), notes: 'Recovery pace' },
+        { day: 'Sun', type: 'Long Run', distance: long, notes: 'Build mental toughness, stay relaxed' },
       ]
     });
   }
 
-  // Weeks 25-27: Taper
-  const taperDistances = [
-    { long: 15, easy: [5, 4], quality: { type: 'Easy Tempo', dist: 5, notes: 'Short tempo effort, stay sharp' } },
-    { long: 11, easy: [4, 3], quality: { type: 'Race Pace', dist: 4, notes: '2km warm-up, 2km race pace, easy finish' } },
-    { long: 8, easy: [3, 3], quality: { type: 'Shakeout', dist: 3, notes: 'Light strides, stay loose' } },
-  ];
-  for (let i = 0; i < 3; i++) {
-    const b = taperDistances[i];
+  // TAPER: reduce volume progressively
+  for (let i = 0; i < taperWeeks; i++) {
+    const t = taperWeeks === 1 ? 1 : i / (taperWeeks - 1);
+    const long = lerp(15, 8, t);
+    const easy = lerp(5, 3, t);
     plan.push({
-      week: i + 25,
-      phase: 'Taper',
+      week: w++, phase: 'Taper',
       days: [
-        { day: 'Tue', type: 'Easy Run', distance: b.easy[0], notes: 'Relaxed effort' },
-        { day: 'Wed', type: b.quality.type, distance: b.quality.dist, notes: b.quality.notes },
-        { day: 'Fri', type: 'Easy Run', distance: b.easy[1], notes: 'Short and easy' },
-        { day: 'Sun', type: 'Long Run', distance: b.long, notes: 'Reduced volume, stay confident' },
+        { day: 'Tue', type: 'Easy Run', distance: easy, notes: 'Relaxed effort' },
+        { day: 'Thu', type: 'Easy Run', distance: lerp(4, 2, t), notes: 'Short and easy' },
+        { day: 'Sun', type: 'Long Run', distance: long, notes: 'Reduced volume, stay confident' },
       ]
     });
   }
 
-  // Weeks 28-29: Race week
+  // RACE WEEK
   plan.push({
-    week: 28,
-    phase: 'Race Week Prep',
+    week: w++, phase: 'Race Week!',
     days: [
       { day: 'Tue', type: 'Easy Run', distance: 3, notes: 'Light jog' },
       { day: 'Thu', type: 'Shakeout', distance: 2, notes: 'Very easy, a few strides' },
-      { day: 'Sat', type: 'Rest', distance: 0, notes: 'Rest and hydrate' },
-    ]
-  });
-  plan.push({
-    week: 29,
-    phase: 'Race Week!',
-    days: [
       { day: 'Sun', type: '🏁 RACE DAY', distance: 21.1, notes: 'Half Marathon! Trust your training. Start easy, finish strong!' },
     ]
   });
@@ -323,39 +429,188 @@ function generatePlan() {
   return plan;
 }
 
-const PLAN = generatePlan();
+// AI plan generation
+async function generateAIPlan(numWeeks) {
+  const recentRuns = APP.runLog.slice(-10);
+  let runnerContext = `Beginner runner. ${APP.runLog.length} total runs logged, ${APP.runLog.reduce((s, r) => s + r.distance, 0).toFixed(1)} km total.`;
+  if (recentRuns.length > 0) {
+    runnerContext += `\nRecent runs:\n` + recentRuns.map(r => {
+      const pace = r.duration && r.distance ? (r.duration / r.distance).toFixed(1) : '?';
+      return `${r.date}: ${r.distance}km in ${r.duration}min (${pace} min/km, effort ${r.effort}/10)`;
+    }).join('\n');
+  }
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': APP.settings.apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      system: `You are an expert running coach. Output ONLY a valid JSON array, no other text, no markdown.
+
+Create a half marathon training plan with EXACTLY ${numWeeks} entries in the array (one per week, numbered 1 to ${numWeeks}).
+
+Each entry: {"week": <1-${numWeeks}>, "phase": "<phase>", "days": [{"day": "<Day>", "type": "<type>", "distance": <km>, "notes": "<note>"}]}
+
+RULES:
+- Day values MUST be: Mon, Tue, Wed, Thu, Fri, Sat, or Sun
+- Do NOT include any calendar dates — only day-of-week abbreviations
+- Phase names: "Base Building", "Building Volume", "Peak Training", "Taper", "Race Week!"
+- Workout types: "Easy Run", "Long Run", "Tempo Run", "Intervals", "Race Pace", "Shakeout", "Rest"
+- Week ${numWeeks} is race week. Its last workout MUST be: {"day": "Sun", "type": "🏁 RACE DAY", "distance": 21.1, "notes": "Half Marathon! Trust your training."}
+- 3 runs/week in base building, 3-4 in build/peak, 2-3 in taper
+- Long run peaks around 18-19km before tapering
+- Distances in km, numbers only (no units in the value)`,
+      messages: [{
+        role: 'user',
+        content: `Create a ${numWeeks}-week half marathon training plan for a beginner runner.\n\n${runnerContext}`
+      }],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error?.message || `API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const text = data.content[0].text;
+  // Extract JSON array from response (handle possible markdown code blocks)
+  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) throw new Error('Could not parse plan from AI response');
+  const raw = JSON.parse(jsonMatch[0]);
+
+  // Post-process: force-renumber weeks 1-N, validate day abbreviations
+  const validDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  return raw.map((entry, idx) => ({
+    week: idx + 1,
+    phase: entry.phase || 'Training',
+    days: (entry.days || []).filter(d => validDays.includes(d.day)).map(d => ({
+      day: d.day,
+      type: d.type || 'Easy Run',
+      distance: typeof d.distance === 'number' ? d.distance : parseFloat(d.distance) || 0,
+      notes: d.notes || ''
+    }))
+  }));
+}
+
+async function triggerGeneratePlan(useAI) {
+  const numWeeks = calcWeeksBetween(APP.settings.startDate, APP.settings.raceDate);
+  if (numWeeks < 4) {
+    showToast('Set start and race dates at least 4 weeks apart');
+    return;
+  }
+
+  if (useAI) {
+    document.getElementById('plan-generating').classList.remove('hidden');
+    try {
+      APP.plan = await generateAIPlan(numWeeks);
+      saveData(APP);
+      showToast(`AI generated a ${numWeeks}-week plan!`);
+    } catch (err) {
+      showToast(`AI error: ${err.message}. Using default plan.`);
+      APP.plan = generateDefaultPlan(numWeeks);
+      saveData(APP);
+    }
+    document.getElementById('plan-generating').classList.add('hidden');
+  } else {
+    APP.plan = generateDefaultPlan(numWeeks);
+    saveData(APP);
+    showToast(`Generated ${numWeeks}-week plan`);
+  }
+  APP.completedWorkouts = {};
+  saveData(APP);
+  renderPlan();
+}
+
+function getPlan() { return APP.plan || []; }
 
 // ============================================================
 // TAB SWITCHING
 // ============================================================
+function isDesktop() { return window.innerWidth >= 1024; }
+
 function switchTab(tab) {
-  ['plan', 'log', 'coach'].forEach(t => {
-    document.getElementById(`view-${t}`).classList.toggle('hidden', t !== tab);
-    document.getElementById(`tab-${t}`).classList.toggle('tab-active', t === tab);
+  const isLg = isDesktop();
+
+  // On desktop: plan and log switch between each other, coach is always visible
+  // On mobile: all 3 tabs switch normally
+  ['plan', 'log'].forEach(t => {
+    const show = (tab === t) || (tab === 'coach' && t === 'plan' && isLg);
+    document.getElementById(`view-${t}`).classList.toggle('hidden', !show);
   });
-  if (tab === 'plan') renderPlan();
+
+  // Coach: always visible on desktop, toggled on mobile
+  const coachEl = document.getElementById('view-coach');
+  if (isLg) {
+    coachEl.classList.remove('hidden');
+  } else {
+    coachEl.classList.toggle('hidden', tab !== 'coach');
+  }
+
+  // Tab active states
+  ['plan', 'log', 'coach'].forEach(t => {
+    const tabEl = document.getElementById(`tab-${t}`);
+    if (tabEl) tabEl.classList.toggle('tab-active', t === tab);
+  });
+
+  if (tab === 'plan' || (tab === 'coach' && isLg)) renderPlan();
   if (tab === 'log') renderLog();
-  if (tab === 'coach') renderCoach();
+  if (tab === 'coach' || isLg) renderCoach();
 }
 
 // ============================================================
 // PLAN TAB
 // ============================================================
+// Parse date string as local time (avoids UTC timezone shift)
+function localDate(str) { return new Date(str + 'T00:00:00'); }
+
+// Find the Monday on or before a given date
+function toMonday(d) {
+  const date = new Date(d);
+  const day = date.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const offset = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + offset);
+  return date;
+}
+
+// Get the Monday that starts week N of the plan
+function getWeekMonday(weekNum) {
+  const start = toMonday(localDate(APP.settings.startDate));
+  const monday = new Date(start);
+  monday.setDate(monday.getDate() + (weekNum - 1) * 7);
+  return monday;
+}
+
 function getCurrentWeek() {
-  const start = new Date(APP.settings.startDate);
+  const start = toMonday(localDate(APP.settings.startDate));
   const now = new Date();
   const diff = Math.floor((now - start) / (7 * 24 * 60 * 60 * 1000));
-  return Math.max(1, Math.min(diff + 1, 29));
+  const total = getPlan().length || 1;
+  return Math.max(1, Math.min(diff + 1, total));
 }
 
 function getWeekDateRange(weekNum) {
-  const start = new Date(APP.settings.startDate);
-  const weekStart = new Date(start);
-  weekStart.setDate(weekStart.getDate() + (weekNum - 1) * 7);
+  const weekStart = getWeekMonday(weekNum);
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 6);
   const fmt = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   return `${fmt(weekStart)} – ${fmt(weekEnd)}`;
+}
+
+const DAY_OFFSETS = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+
+function getWorkoutDate(weekNum, dayAbbr) {
+  const monday = getWeekMonday(weekNum);
+  const offset = DAY_OFFSETS[dayAbbr] || 0;
+  const d = new Date(monday);
+  d.setDate(d.getDate() + offset);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function toggleWeek(weekNum) {
@@ -376,17 +631,68 @@ function toggleWorkout(weekNum, dayIdx) {
   renderPlan();
 }
 
+function getWorkoutDateISO(weekNum, dayAbbr) {
+  const monday = getWeekMonday(weekNum);
+  const offset = DAY_OFFSETS[dayAbbr] || 0;
+  const d = new Date(monday);
+  d.setDate(d.getDate() + offset);
+  // Format as YYYY-MM-DD using local time (not UTC)
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function prefillAndLog(weekNum, dayIdx, distance, type, dayAbbr) {
+  switchTab('log');
+  document.getElementById('run-date').value = getWorkoutDateISO(weekNum, dayAbbr);
+  document.getElementById('run-distance').value = distance;
+  document.getElementById('run-notes').value = type;
+  document.getElementById('run-distance').focus();
+}
+
+function findMatchingWorkout(dateStr) {
+  for (const week of getPlan()) {
+    for (let i = 0; i < week.days.length; i++) {
+      const key = `${week.week}-${i}`;
+      if (APP.completedWorkouts[key]) continue;
+      const workoutDate = getWorkoutDateISO(week.week, week.days[i].day);
+      if (workoutDate === dateStr) return key;
+    }
+  }
+  return null;
+}
+
 function renderPlan() {
   const currentWeek = getCurrentWeek();
-  const totalWorkouts = PLAN.reduce((s, w) => s + w.days.length, 0);
+  const totalWorkouts = getPlan().reduce((s, w) => s + w.days.length, 0);
   const completedCount = Object.keys(APP.completedWorkouts).length;
   const pct = Math.round((completedCount / totalWorkouts) * 100);
 
-  document.getElementById('plan-subtitle').textContent = `Week ${currentWeek} of 29 • ${getWeekDateRange(currentWeek)}`;
-  document.getElementById('plan-progress-badge').textContent = `${pct}% complete`;
+  const totalWeeks = getPlan().length;
+  const raceDateStr = APP.settings.raceDate ? ` • Race: ${localDate(APP.settings.raceDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}` : '';
+  document.getElementById('plan-subtitle').textContent = totalWeeks > 0
+    ? `Week ${currentWeek} of ${totalWeeks} • ${getWeekDateRange(currentWeek)}${raceDateStr}`
+    : 'Set your dates and generate a plan';
+  document.getElementById('plan-progress-badge').textContent = totalWeeks > 0 ? `${pct}% complete` : '';
+
+  // Show/hide generate prompt
+  const hasValidDates = APP.settings.startDate && APP.settings.raceDate;
+  const needsPlan = !APP.plan || APP.plan.length === 0;
+  const generatePrompt = document.getElementById('plan-generate-prompt');
+  if (needsPlan && hasValidDates) {
+    const weeks = calcWeeksBetween(APP.settings.startDate, APP.settings.raceDate);
+    generatePrompt.classList.remove('hidden');
+    document.getElementById('generate-prompt-text').textContent = `${weeks} weeks until race day. Let's build your training plan.`;
+    const aiBtn = document.getElementById('btn-ai-plan');
+    if (APP.settings.apiKey) aiBtn.classList.remove('hidden');
+    else aiBtn.classList.add('hidden');
+  } else {
+    generatePrompt.classList.add('hidden');
+  }
 
   const container = document.getElementById('plan-weeks');
-  container.innerHTML = PLAN.map(week => {
+  container.innerHTML = getPlan().map(week => {
     const isCurrent = week.week === currentWeek;
     const isPast = week.week < currentWeek;
     const isOpen = isCurrent;
@@ -437,12 +743,13 @@ function renderPlan() {
                 </button>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
-                    <span class="text-xs font-medium text-gray-400 w-7">${d.day}</span>
+                    <span class="text-xs font-medium text-gray-400 w-24">${d.day} ${getWorkoutDate(week.week, d.day)}</span>
                     <span class="text-sm font-medium ${typeColor}">${d.type}</span>
                     ${d.distance > 0 ? `<span class="text-xs text-gray-400">${d.distance} km</span>` : ''}
                   </div>
                   <p class="text-xs text-gray-400 mt-0.5">${d.notes}</p>
                 </div>
+                ${!done && d.distance > 0 ? `<button onclick="event.stopPropagation(); prefillAndLog(${week.week}, ${i}, ${d.distance}, '${d.type}', '${d.day}')" class="text-xs text-brand-600 hover:text-brand-800 font-medium px-2 py-1 rounded hover:bg-brand-50 transition flex-shrink-0" title="Log this workout">Log</button>` : ''}
               </div>
             `;
           }).join('')}
@@ -472,11 +779,18 @@ function logRun(e) {
     notes: document.getElementById('run-notes').value.trim(),
   };
   APP.runLog.push(run);
+
+  // Auto-mark matching planned workout as completed
+  const matchKey = findMatchingWorkout(run.date);
+  if (matchKey) {
+    APP.completedWorkouts[matchKey] = true;
+  }
+
   saveData(APP);
   document.getElementById('log-form').reset();
   document.getElementById('run-date').value = new Date().toISOString().split('T')[0];
   document.getElementById('effort-val').textContent = '5';
-  showToast('Run logged! 🎉');
+  showToast(matchKey ? 'Run logged & workout checked off! 🎉' : 'Run logged! 🎉');
   renderLog();
 }
 
@@ -565,6 +879,13 @@ function renderMileageChart() {
 // ============================================================
 // COACH TAB (Claude API)
 // ============================================================
+function clearChat() {
+  if (!confirm('Clear the conversation with your coach?')) return;
+  APP.chatHistory = [];
+  saveData(APP);
+  renderCoach();
+}
+
 function renderCoach() {
   const hasKey = APP.settings.apiKey && APP.settings.apiKey.length > 0;
   document.getElementById('coach-no-key').classList.toggle('hidden', hasKey);
@@ -575,7 +896,7 @@ function renderCoach() {
     if (APP.chatHistory.length === 0) {
       APP.chatHistory.push({
         role: 'assistant',
-        content: "Hey! I'm your running coach 🏃 I can see your training plan and logged runs. Ask me anything — pacing, recovery, adjusting your plan, race day strategy, or just how you're feeling about training. What's on your mind?"
+        content: "Hey! I'm your running coach 🏃 I can see your training plan and logged runs. Ask me anything — pacing, recovery, race day strategy, or how you're feeling.\n\nI can also **adjust your plan** directly. If you're hurt, tired, or want more volume — just tell me and I'll suggest changes you can apply with one click."
       });
       saveData(APP);
       renderChatMessages();
@@ -595,18 +916,88 @@ function renderChatMessages() {
 }
 
 function formatMarkdown(text) {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1 rounded text-xs">$1</code>')
-    .replace(/\n/g, '<br>');
+  // Extract plan-change blocks before escaping HTML
+  const parts = text.split(/:::plan-change\n?([\s\S]*?)\n?:::/g);
+  let html = '';
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      // Regular text
+      html += parts[i]
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code class="bg-gray-200 px-1 rounded text-xs">$1</code>')
+        .replace(/\n/g, '<br>');
+    } else {
+      // Plan-change block — render as apply card
+      try {
+        const data = JSON.parse(parts[i]);
+        const changeId = 'pc-' + Math.random().toString(36).slice(2, 8);
+        // Store the change data globally so the button can access it
+        window._pendingChanges = window._pendingChanges || {};
+        window._pendingChanges[changeId] = data;
+        const weekNums = data.changes.map(c => c.week).join(', ');
+        const applied = isPlanChangeApplied(data);
+        html += `
+          <div class="mt-3 border-2 ${applied ? 'border-brand-200 bg-brand-50' : 'border-amber-200 bg-amber-50'} rounded-xl p-3">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm">${applied ? '✅' : '📋'}</span>
+              <span class="text-sm font-semibold ${applied ? 'text-brand-700' : 'text-amber-700'}">Plan Change — Week${data.changes.length > 1 ? 's' : ''} ${weekNums}</span>
+            </div>
+            <p class="text-xs text-gray-600 mb-2">${(data.summary || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</p>
+            <div class="text-xs text-gray-500 mb-2 space-y-1">
+              ${data.changes.map(c => `<div><strong>Week ${c.week}:</strong> ${c.days.map(d => d.day + ' ' + d.type + ' ' + d.distance + 'km').join(', ')}</div>`).join('')}
+            </div>
+            ${applied
+              ? '<div class="text-xs text-brand-600 font-medium">Applied to your plan</div>'
+              : `<button onclick="applyPlanChange('${changeId}')" class="w-full bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium py-2 rounded-lg transition">Apply Changes</button>`
+            }
+          </div>`;
+      } catch {
+        html += '<div class="text-xs text-red-400 mt-2">[Could not parse plan change]</div>';
+      }
+    }
+  }
+  return html;
+}
+
+function isPlanChangeApplied(data) {
+  const plan = getPlan();
+  return data.changes.every(change => {
+    const week = plan.find(w => w.week === change.week);
+    if (!week) return false;
+    if (week.days.length !== change.days.length) return false;
+    return change.days.every((d, i) =>
+      week.days[i] && week.days[i].day === d.day && week.days[i].type === d.type && week.days[i].distance === d.distance
+    );
+  });
+}
+
+function applyPlanChange(changeId) {
+  const data = window._pendingChanges && window._pendingChanges[changeId];
+  if (!data) return;
+
+  data.changes.forEach(change => {
+    const weekIdx = APP.plan.findIndex(w => w.week === change.week);
+    if (weekIdx !== -1) {
+      APP.plan[weekIdx].days = change.days.map(d => ({
+        day: d.day,
+        type: d.type,
+        distance: d.distance,
+        notes: d.notes || ''
+      }));
+    }
+  });
+
+  saveData(APP);
+  showToast(`Plan updated — Week${data.changes.length > 1 ? 's' : ''} ${data.changes.map(c => c.week).join(', ')}`);
+  renderChatMessages();
 }
 
 function buildCoachContext() {
   const currentWeek = getCurrentWeek();
-  const currentPlan = PLAN.find(w => w.week === currentWeek);
-  const nearbyWeeks = PLAN.filter(w => w.week >= currentWeek - 1 && w.week <= currentWeek + 2);
+  const currentPlan = getPlan().find(w => w.week === currentWeek);
+  const nearbyWeeks = getPlan().filter(w => w.week >= currentWeek - 1 && w.week <= currentWeek + 2);
 
   // Recent runs (last 14 days)
   const twoWeeksAgo = new Date();
@@ -618,13 +1009,18 @@ function buildCoachContext() {
   const completedThisWeek = currentPlan ? currentPlan.days.filter((_, i) => APP.completedWorkouts[`${currentWeek}-${i}`]).length : 0;
   const totalThisWeek = currentPlan ? currentPlan.days.length : 0;
 
-  let ctx = `RUNNER PROFILE: Beginner runner training for a half marathon in mid-October 2026.\n`;
-  ctx += `CURRENT STATUS: Week ${currentWeek} of 29. ${completedThisWeek}/${totalThisWeek} workouts completed this week.\n`;
+  const totalWeeks = getPlan().length;
+  const raceDate = APP.settings.raceDate || 'TBD';
+  let ctx = `RUNNER PROFILE: Beginner runner training for a half marathon on ${raceDate}.\n`;
+  ctx += `PLAN: ${totalWeeks} weeks total. CURRENT STATUS: Week ${currentWeek} of ${totalWeeks}. ${completedThisWeek}/${totalThisWeek} workouts completed this week.\n`;
   ctx += `TOTAL LOGGED: ${APP.runLog.length} runs, ${APP.runLog.reduce((s, r) => s + r.distance, 0).toFixed(1)} km total.\n\n`;
 
-  ctx += `UPCOMING SCHEDULE:\n`;
-  nearbyWeeks.forEach(w => {
-    ctx += `Week ${w.week} (${w.phase}): ${w.days.map(d => `${d.day} ${d.type} ${d.distance}km`).join(', ')}\n`;
+  // Full plan with date ranges so coach can map calendar dates to week numbers
+  ctx += `FULL PLAN (week → dates → workouts):\n`;
+  getPlan().forEach(w => {
+    const range = getWeekDateRange(w.week);
+    const marker = w.week === currentWeek ? ' ← CURRENT' : '';
+    ctx += `Week ${w.week} [${range}] (${w.phase})${marker}: ${w.days.map(d => `${d.day} ${d.type} ${d.distance}km`).join(', ')}\n`;
   });
 
   if (recentRuns.length > 0) {
@@ -657,6 +1053,34 @@ async function sendMessage(e) {
 
 Be concise, practical, and supportive. Give specific advice based on their actual data. If they report pain or injury, always err on the side of caution. Adjust recommendations based on their perceived effort and progress.
 
+PLAN MODIFICATIONS:
+When you recommend changing the training plan (due to injury, fatigue, extra energy, schedule changes, etc.), include a plan change block so the runner can apply it with one click. Use this exact format:
+
+:::plan-change
+{"changes": [
+  {"week": 5, "days": [
+    {"day": "Tue", "type": "Easy Run", "distance": 2, "notes": "Reduced — recovery from shin pain"},
+    {"day": "Thu", "type": "Rest", "distance": 0, "notes": "Extra rest day"},
+    {"day": "Sun", "type": "Long Run", "distance": 4, "notes": "Keep it short and easy"}
+  ]},
+  {"week": 6, "days": [
+    {"day": "Tue", "type": "Easy Run", "distance": 2.5, "notes": "Gradual return"},
+    {"day": "Thu", "type": "Easy Run", "distance": 2, "notes": "Easy pace"},
+    {"day": "Sun", "type": "Long Run", "distance": 5, "notes": "Build back slowly"}
+  ]}
+], "summary": "Reduced weeks 5-6 for shin recovery"}
+:::
+
+Rules for plan changes:
+- CRITICAL: Use the week-to-date mapping from the FULL PLAN above to find the correct week number for any calendar date the user mentions
+- Only include weeks that actually change
+- Day abbreviations: Mon, Tue, Wed, Thu, Fri, Sat, Sun
+- Valid types: Easy Run, Long Run, Tempo Run, Intervals, Race Pace, Shakeout, Rest, or any custom type (e.g. "🏁 10K Race", "🏁 5K Race")
+- When adding a tune-up race: adjust the week before (lighter) and after (recovery) too
+- Always explain your reasoning in the message text BEFORE the plan-change block
+- You can modify multiple weeks at once
+- You can change distances, swap workout types, add rest days, or add extra runs
+
 ${context}`;
 
     // Build messages for API (last 20 messages for context window)
@@ -675,7 +1099,7 @@ ${context}`;
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
+        max_tokens: 2048,
         system: systemPrompt,
         messages: apiMessages,
       }),
@@ -704,9 +1128,30 @@ ${context}`;
 // SETTINGS
 // ============================================================
 function openSettings() {
-  document.getElementById('setting-start-date').value = APP.settings.startDate;
+  document.getElementById('setting-race-date').value = APP.settings.raceDate || '';
+  document.getElementById('setting-start-date').value = APP.settings.startDate || '';
   document.getElementById('setting-api-key').value = APP.settings.apiKey || '';
+  updateWeekCount();
   document.getElementById('settings-modal').classList.remove('hidden');
+}
+
+function updateWeekCount() {
+  const start = document.getElementById('setting-start-date').value;
+  const race = document.getElementById('setting-race-date').value;
+  const hint = document.getElementById('week-count-hint');
+  if (start && race) {
+    const weeks = calcWeeksBetween(start, race);
+    if (weeks < 4) {
+      hint.textContent = `${weeks} week${weeks > 1 ? 's' : ''} — need at least 4 weeks for a training plan.`;
+      hint.className = 'text-xs text-red-500 -mt-2';
+    } else {
+      hint.textContent = `${weeks}-week training plan. ${weeks >= 16 ? 'Great timeline!' : weeks >= 10 ? 'Doable but intense.' : 'Aggressive — plan will be compressed.'}`;
+      hint.className = 'text-xs text-gray-500 -mt-2';
+    }
+  } else {
+    hint.textContent = 'Set both dates to generate a plan.';
+    hint.className = 'text-xs text-gray-400 -mt-2';
+  }
 }
 
 function closeSettings() {
@@ -714,12 +1159,42 @@ function closeSettings() {
 }
 
 function saveSettings() {
+  const oldStart = APP.settings.startDate;
+  const oldRace = APP.settings.raceDate;
+  APP.settings.raceDate = document.getElementById('setting-race-date').value;
   APP.settings.startDate = document.getElementById('setting-start-date').value;
   APP.settings.apiKey = document.getElementById('setting-api-key').value.trim();
   saveData(APP);
   closeSettings();
-  showToast('Settings saved');
+
+  // If dates changed significantly and there's a plan, prompt to regenerate
+  const datesChanged = oldStart !== APP.settings.startDate || oldRace !== APP.settings.raceDate;
+  if (datesChanged && APP.plan && APP.plan.length > 0) {
+    const newWeeks = calcWeeksBetween(APP.settings.startDate, APP.settings.raceDate);
+    if (newWeeks !== APP.plan.length && confirm(`Dates changed (now ${newWeeks} weeks). Regenerate the plan?`)) {
+      APP.plan = generateDefaultPlan(newWeeks);
+      APP.completedWorkouts = {};
+      saveData(APP);
+      showToast(`Plan regenerated for ${newWeeks} weeks`);
+    } else {
+      showToast('Settings saved');
+    }
+  } else {
+    showToast('Settings saved');
+  }
   switchTab(document.querySelector('.tab-active').id.replace('tab-', ''));
+}
+
+function regeneratePlan() {
+  const numWeeks = calcWeeksBetween(APP.settings.startDate, APP.settings.raceDate);
+  if (numWeeks < 4) {
+    showToast('Set dates at least 4 weeks apart');
+    return;
+  }
+  if (confirm(`Regenerate the plan for ${numWeeks} weeks? This will clear completed workouts.`)) {
+    closeSettings();
+    triggerGeneratePlan(!!APP.settings.apiKey);
+  }
 }
 
 // ============================================================
@@ -783,7 +1258,8 @@ function showToast(msg) {
 // ============================================================
 // INIT
 // ============================================================
-renderPlan();
+switchTab('plan');
+reconcileData();
 </script>
 </body>
 </html>
