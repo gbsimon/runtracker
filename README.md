@@ -1,6 +1,6 @@
 # RunTracker
 
-A single-file web app for half marathon training. Set your start date and race date, generate a plan, log your runs, and chat with an AI coach that can adjust your schedule on the fly.
+A single-file web app for race training. Supports any distance (5K, 10K, half marathon, marathon, or custom). Set your dates, pick your distance, generate a plan, log your runs, and chat with an AI coach that adjusts your schedule on the fly.
 
 ## Features
 
@@ -13,7 +13,7 @@ A single-file web app for half marathon training. Set your start date and race d
 ## Getting started
 
 1. Open `index.html` in a browser
-2. Click the gear icon, set your **start date** and **race date**
+2. Click the gear icon, set your **start date**, **race date**, and **race distance**
 3. Generate a plan (AI or default)
 4. Optionally add your **Claude API key** to enable the AI coach
 
