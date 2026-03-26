@@ -23,23 +23,15 @@
 			@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
 			body {
 				font-family: "Inter", sans-serif;
-				background: #080812;
+				background: linear-gradient(145deg, #0a0a1a 0%, #0f1628 30%, #0d1117 60%, #080812 100%);
+				min-height: 100vh;
 			}
 			body::before {
 				content: "";
 				position: fixed;
 				inset: 0;
 				z-index: 0;
-				background: url("bg.jpg") center/cover no-repeat;
-				opacity: 0.3;
-				pointer-events: none;
-			}
-			body::after {
-				content: "";
-				position: fixed;
-				inset: 0;
-				z-index: 0;
-				background: radial-gradient(ellipse at 50% 0%, rgba(26, 111, 245, 0.1) 0%, transparent 60%);
+				background: radial-gradient(ellipse at 20% 0%, rgba(26, 111, 245, 0.12) 0%, transparent 50%), radial-gradient(ellipse at 80% 100%, rgba(26, 60, 160, 0.08) 0%, transparent 50%);
 				pointer-events: none;
 			}
 			.tab-active {
@@ -280,8 +272,8 @@
 							<p class="text-sm text-gray-400 mb-4">Set your Claude API key in Settings to chat with your coach.</p>
 							<button onclick="openSettings()" class="bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition glow-sm">Open Settings</button>
 						</div>
-						<div id="coach-chat" class="hidden card p-4 flex flex-col" style="max-height: calc(100vh - 140px)">
-							<div id="chat-messages" class="space-y-3 mb-4 overflow-y-auto flex-1"></div>
+						<div id="coach-chat" class="hidden card p-4 flex flex-col" style="max-height: calc(100vh - 200px)">
+							<div id="chat-messages" class="space-y-3 mb-4 overflow-y-auto flex-1" style="overscroll-behavior: contain"></div>
 							<div id="chat-typing" class="hidden text-sm text-gray-400 mb-3 flex items-center gap-2">
 								<div class="spinner"></div>
 								Coach is thinking...
