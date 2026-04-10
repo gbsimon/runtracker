@@ -187,6 +187,7 @@
 								<p id="plan-subtitle" class="text-sm text-gray-400"></p>
 							</div>
 							<div class="flex gap-2">
+								<span id="plan-stats-badge" class="text-xs bg-white/5 text-gray-400 px-3 py-1 rounded-lg font-medium border border-white/10"></span>
 								<span id="plan-progress-badge" class="text-xs bg-brand-600/20 text-brand-400 px-3 py-1 rounded-lg font-semibold border border-brand-500/20 glow-sm"></span>
 							</div>
 						</div>
@@ -244,7 +245,7 @@
 						<!-- Weekly Mileage Chart -->
 						<div class="card p-5 mb-4">
 							<h3 class="text-sm font-bold text-gray-300 mb-3">Weekly Mileage</h3>
-							<div id="mileage-chart" class="flex items-end gap-1 h-32"></div>
+							<div id="mileage-chart" class="flex items-end gap-1"></div>
 						</div>
 
 						<!-- Run History -->
@@ -322,6 +323,14 @@
 							<input type="number" id="setting-custom-distance" step="0.1" min="1" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="15" />
 						</div>
 					</div>
+					<div class="grid grid-cols-2 gap-3 -mt-2">
+						<div>
+							<label class="block text-sm font-medium text-gray-300 mb-1">Target Race Pace</label>
+							<input type="text" id="setting-target-pace" inputmode="numeric" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="6:00" pattern="[0-9]+:[0-5][0-9]" />
+							<p class="text-xs text-gray-500 mt-1">min/km goal pace</p>
+						</div>
+						<div></div>
+					</div>
 					<p id="week-count-hint" class="text-xs text-gray-400 -mt-2"></p>
 					<div>
 						<label class="block text-sm font-medium text-gray-300 mb-1">Claude API Key</label>
@@ -362,7 +371,7 @@
 
 			function defaultData() {
 				return {
-					settings: { startDate: "2026-03-23", raceDate: "2026-10-18", raceDistance: 21.1, apiKey: "" },
+					settings: { startDate: "2026-03-23", raceDate: "2026-10-18", raceDistance: 21.1, targetPace: "", apiKey: "" },
 					runLog: [],
 					chatHistory: [],
 					completedWorkouts: {},
@@ -593,6 +602,17 @@
 					],
 				})
 
+				// Add suggested pace to each workout if target pace is set
+				const racePaceSec = parsePace(APP.settings.targetPace)
+				if (racePaceSec > 0) {
+					plan.forEach((week) => {
+						week.days.forEach((d) => {
+							const paceSec = getWorkoutPace(d.type, racePaceSec)
+							if (paceSec > 0) d.pace = formatPace(paceSec)
+						})
+					})
+				}
+
 				return plan
 			}
 
@@ -637,7 +657,7 @@ RULES:
 - 3 runs/week in base building, 3-4 in build/peak, 2-3 in taper
 - Long run peaks around ${Math.round(getRaceDistance() * 0.9)}km before tapering
 - Scale all distances appropriately for a ${getRaceDistance()}km race
-- Distances in km, numbers only (no units in the value)`,
+- Distances in km, numbers only (no units in the value)${APP.settings.targetPace ? `\n- The runner's target race pace is ${APP.settings.targetPace} min/km. Include a "pace" field (string, format "M:SS" e.g. "6:00") for each workout with the suggested pace. Easy runs ~60-90s slower than race pace, long runs ~45-75s slower, tempo ~10s slower, intervals ~20s faster, race pace = exact target.` : ""}`,
 						messages: [
 							{
 								role: "user",
@@ -666,12 +686,11 @@ RULES:
 					phase: entry.phase || "Training",
 					days: (entry.days || [])
 						.filter((d) => validDays.includes(d.day))
-						.map((d) => ({
-							day: d.day,
-							type: d.type || "Easy Run",
-							distance: typeof d.distance === "number" ? d.distance : parseFloat(d.distance) || 0,
-							notes: d.notes || "",
-						})),
+						.map((d) => {
+							const day = { day: d.day, type: d.type || "Easy Run", distance: typeof d.distance === "number" ? d.distance : parseFloat(d.distance) || 0, notes: d.notes || "" }
+							if (d.pace) day.pace = String(d.pace)
+							return day
+						}),
 				}))
 			}
 
@@ -842,11 +861,11 @@ RULES:
 				return `${y}-${m}-${day}`
 			}
 
-			function prefillAndLog(weekNum, dayIdx, distance, type, dayAbbr) {
+			function prefillAndLog(weekNum, dayIdx, distance, type, dayAbbr, pace) {
 				switchTab("log")
 				document.getElementById("run-date").value = getWorkoutDateISO(weekNum, dayAbbr)
 				document.getElementById("run-distance").value = distance
-				document.getElementById("run-notes").value = type
+				document.getElementById("run-notes").value = pace ? `${type} @ ${pace}/km` : type
 				document.getElementById("run-distance").focus()
 			}
 
@@ -872,6 +891,19 @@ RULES:
 				const raceDateStr = APP.settings.raceDate ? ` • Race: ${localDate(APP.settings.raceDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}` : ""
 				document.getElementById("plan-subtitle").textContent = totalWeeks > 0 ? `Week ${currentWeek} of ${totalWeeks} • ${getWeekDateRange(currentWeek)}${raceDateStr}` : "Set your dates and generate a plan"
 				document.getElementById("plan-progress-badge").textContent = totalWeeks > 0 ? `${pct}% complete` : ""
+
+				// Total km and time stats
+				const totalKm = APP.runLog.reduce((s, r) => s + r.distance, 0)
+				const totalSec = APP.runLog.reduce((s, r) => s + (r.duration || 0), 0)
+				const statsBadge = document.getElementById("plan-stats-badge")
+				if (APP.runLog.length > 0) {
+					const hrs = Math.floor(totalSec / 3600)
+					const mins = Math.floor((totalSec % 3600) / 60)
+					const timeStr = hrs > 0 ? `${hrs}h${String(mins).padStart(2, "0")}` : `${mins}m`
+					statsBadge.textContent = `${totalKm.toFixed(1)} km • ${timeStr}`
+				} else {
+					statsBadge.textContent = ""
+				}
 
 				// Show/hide generate prompt
 				const hasValidDates = APP.settings.startDate && APP.settings.raceDate
@@ -935,6 +967,7 @@ RULES:
 								Rest: "text-gray-500",
 							}
 							const typeColor = typeColors[d.type] || "text-gray-400"
+							const displayPace = d.pace || (() => { const rp = parsePace(APP.settings.targetPace); return rp > 0 ? formatPace(getWorkoutPace(d.type, rp)) : "" })()
 							return `
               <div class="flex items-start gap-3 py-2 border-t border-white/5 ${done ? "opacity-35" : ""}">
                 <button onclick="toggleWorkout(${week.week}, ${i})" class="mt-0.5 w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition ${done ? "bg-brand-500 border-brand-500 text-white" : "border-white/15 hover:border-brand-400"}">
@@ -945,10 +978,11 @@ RULES:
                     <span class="text-xs font-medium text-gray-400 w-24">${d.day} ${getWorkoutDate(week.week, d.day)}</span>
                     <span class="text-sm font-semibold ${typeColor}">${d.type}</span>
                     ${d.distance > 0 ? `<span class="text-xs text-gray-400 font-medium">${d.distance} km</span>` : ""}
+                    ${displayPace ? `<span class="text-xs text-gray-500 font-medium">@ ${displayPace}/km</span>` : ""}
                   </div>
                   <p class="text-xs text-gray-500 mt-0.5">${d.notes}</p>
                 </div>
-                ${!done && d.distance > 0 ? `<button onclick="event.stopPropagation(); prefillAndLog(${week.week}, ${i}, ${d.distance}, '${d.type}', '${d.day}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold px-2 py-1 rounded-lg hover:bg-brand-600/15 transition flex-shrink-0" title="Log this workout">Log</button>` : ""}
+                ${!done && d.distance > 0 ? `<button onclick="event.stopPropagation(); prefillAndLog(${week.week}, ${i}, ${d.distance}, '${d.type}', '${d.day}', '${displayPace}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold px-2 py-1 rounded-lg hover:bg-brand-600/15 transition flex-shrink-0" title="Log this workout">Log</button>` : ""}
               </div>
             `
 						})
@@ -978,6 +1012,37 @@ RULES:
 				const m = Math.floor(totalSeconds / 60)
 				const s = totalSeconds % 60
 				return `${m}:${String(s).padStart(2, "0")}`
+			}
+
+			// Parse "M:SS" pace string to seconds per km
+			function parsePace(str) {
+				if (!str) return 0
+				const parts = str.split(":")
+				if (parts.length !== 2) return 0
+				return parseInt(parts[0]) * 60 + parseInt(parts[1])
+			}
+
+			// Format seconds per km to "M:SS" string
+			function formatPace(secs) {
+				if (!secs || secs <= 0) return ""
+				const m = Math.floor(secs / 60)
+				const s = Math.round(secs % 60)
+				return `${m}:${String(s).padStart(2, "0")}`
+			}
+
+			// Get suggested pace (seconds/km) for a workout type given race pace (seconds/km)
+			function getWorkoutPace(type, racePaceSec) {
+				if (!racePaceSec) return 0
+				switch (type) {
+					case "Easy Run": return racePaceSec + 75
+					case "Long Run": return racePaceSec + 60
+					case "Tempo Run": return racePaceSec + 10
+					case "Easy Tempo": return racePaceSec + 10
+					case "Intervals": return racePaceSec - 20
+					case "Race Pace": return racePaceSec
+					case "Shakeout": return racePaceSec + 90
+					default: return type.includes("RACE") ? racePaceSec : 0
+				}
 			}
 
 			function logRun(e) {
@@ -1065,29 +1130,41 @@ RULES:
 					return
 				}
 
-				// Group runs by week (ISO week)
+				// Group runs by plan week (relative to plan start date)
 				const weekMap = {}
+				const planStart = APP.settings.startDate ? toMonday(localDate(APP.settings.startDate)) : null
 				APP.runLog.forEach((r) => {
 					const d = new Date(r.date + "T00:00:00")
-					const jan1 = new Date(d.getFullYear(), 0, 1)
-					const weekNum = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7)
-					const key = `${d.getFullYear()}-W${weekNum}`
+					let weekNum, key
+					if (planStart) {
+						weekNum = Math.floor((d - planStart) / (7 * 86400000)) + 1
+						key = `W${weekNum}`
+					} else {
+						const jan1 = new Date(d.getFullYear(), 0, 1)
+						weekNum = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7)
+						key = `${d.getFullYear()}-W${weekNum}`
+					}
 					weekMap[key] = (weekMap[key] || 0) + r.distance
 				})
 
 				const weeks = Object.entries(weekMap)
-					.sort((a, b) => a[0].localeCompare(b[0]))
+					.sort((a, b) => {
+						const numA = parseInt(a[0].match(/W(\d+)/)?.[1] || "0")
+						const numB = parseInt(b[0].match(/W(\d+)/)?.[1] || "0")
+						return numA !== numB ? numA - numB : a[0].localeCompare(b[0])
+					})
 					.slice(-12)
 				const maxKm = Math.max(...weeks.map((w) => w[1]))
 
+				const maxBarPx = 160
 				document.getElementById("mileage-chart").innerHTML = weeks
 					.map(([label, km]) => {
-						const height = maxKm > 0 ? Math.max(4, (km / maxKm) * 100) : 4
-						const shortLabel = label.split("-")[1]
+						const barPx = maxKm > 0 ? Math.max(3, Math.round((km / maxKm) * maxBarPx)) : 3
+						const shortLabel = label.includes("-") ? label.split("-")[1] : label
 						return `
-      <div class="flex-1 flex flex-col items-center justify-end h-full">
-        <div class="text-xs text-gray-400 font-medium mb-1">${km.toFixed(0)}</div>
-        <div class="w-full bg-brand-500/60 rounded-t-md" style="height: ${height}%; box-shadow: 0 0 8px rgba(51,144,255,0.2);" title="${km.toFixed(1)} km"></div>
+      <div class="flex-1 flex flex-col items-center justify-end">
+        <div class="text-xs text-gray-400 font-medium mb-1">${km.toFixed(1)}</div>
+        <div class="w-full bg-brand-500/60 rounded-t-md" style="height: ${barPx}px; box-shadow: 0 0 8px rgba(51,144,255,0.2);" title="${km.toFixed(1)} km"></div>
         <div class="text-xs text-gray-600 mt-1">${shortLabel}</div>
       </div>
     `
@@ -1201,17 +1278,17 @@ RULES:
 				data.changes.forEach((change) => {
 					const weekIdx = APP.plan.findIndex((w) => w.week === change.week)
 					if (weekIdx !== -1) {
-						APP.plan[weekIdx].days = change.days.map((d) => ({
-							day: d.day,
-							type: d.type,
-							distance: d.distance,
-							notes: d.notes || "",
-						}))
+						APP.plan[weekIdx].days = change.days.map((d) => {
+							const day = { day: d.day, type: d.type, distance: d.distance, notes: d.notes || "" }
+							if (d.pace) day.pace = d.pace
+							return day
+						})
 					}
 				})
 
 				saveData(APP)
 				showToast(`Plan updated — Week${data.changes.length > 1 ? "s" : ""} ${data.changes.map((c) => c.week).join(", ")}`)
+				renderPlan()
 				renderChatMessages()
 			}
 
@@ -1230,7 +1307,8 @@ RULES:
 
 				const totalWeeks = getPlan().length
 				const raceDate = APP.settings.raceDate || "TBD"
-				let ctx = `RUNNER PROFILE: Beginner runner training for a ${getRaceLabel()} (${getRaceDistance()}km) on ${raceDate}.\n`
+				const paceInfo = APP.settings.targetPace ? ` Target race pace: ${APP.settings.targetPace} min/km.` : ""
+				let ctx = `RUNNER PROFILE: Beginner runner training for a ${getRaceLabel()} (${getRaceDistance()}km) on ${raceDate}.${paceInfo}\n`
 				ctx += `PLAN: ${totalWeeks} weeks total. CURRENT STATUS: Week ${currentWeek} of ${totalWeeks}. ${completedThisWeek}/${totalThisWeek} workouts completed this week.\n`
 				ctx += `TOTAL LOGGED: ${APP.runLog.length} runs, ${APP.runLog.reduce((s, r) => s + r.distance, 0).toFixed(1)} km total.\n\n`
 
@@ -1239,7 +1317,7 @@ RULES:
 				getPlan().forEach((w) => {
 					const range = getWeekDateRange(w.week)
 					const marker = w.week === currentWeek ? " ← CURRENT" : ""
-					ctx += `Week ${w.week} [${range}] (${w.phase})${marker}: ${w.days.map((d) => `${d.day} ${d.type} ${d.distance}km`).join(", ")}\n`
+					ctx += `Week ${w.week} [${range}] (${w.phase})${marker}: ${w.days.map((d) => `${d.day} ${d.type} ${d.distance}km${d.pace ? " @" + d.pace + "/km" : ""}`).join(", ")}\n`
 				})
 
 				if (recentRuns.length > 0) {
@@ -1279,14 +1357,14 @@ When you recommend changing the training plan (due to injury, fatigue, extra ene
 :::plan-change
 {"changes": [
   {"week": 5, "days": [
-    {"day": "Tue", "type": "Easy Run", "distance": 2, "notes": "Reduced — recovery from shin pain"},
+    {"day": "Tue", "type": "Easy Run", "distance": 2, "pace": "7:15", "notes": "Reduced — recovery from shin pain"},
     {"day": "Thu", "type": "Rest", "distance": 0, "notes": "Extra rest day"},
-    {"day": "Sun", "type": "Long Run", "distance": 4, "notes": "Keep it short and easy"}
+    {"day": "Sun", "type": "Long Run", "distance": 4, "pace": "7:00", "notes": "Keep it short and easy"}
   ]},
   {"week": 6, "days": [
-    {"day": "Tue", "type": "Easy Run", "distance": 2.5, "notes": "Gradual return"},
-    {"day": "Thu", "type": "Easy Run", "distance": 2, "notes": "Easy pace"},
-    {"day": "Sun", "type": "Long Run", "distance": 5, "notes": "Build back slowly"}
+    {"day": "Tue", "type": "Easy Run", "distance": 2.5, "pace": "7:15", "notes": "Gradual return"},
+    {"day": "Thu", "type": "Easy Run", "distance": 2, "pace": "7:15", "notes": "Easy pace"},
+    {"day": "Sun", "type": "Long Run", "distance": 5, "pace": "7:00", "notes": "Build back slowly"}
   ]}
 ], "summary": "Reduced weeks 5-6 for shin recovery"}
 :::
@@ -1300,6 +1378,8 @@ Rules for plan changes:
 - Always explain your reasoning in the message text BEFORE the plan-change block
 - You can modify multiple weeks at once
 - You can change distances, swap workout types, add rest days, or add extra runs
+- Include a "pace" field (string, format "M:SS" e.g. "6:00") for each workout with a suggested pace in min/km${APP.settings.targetPace ? `. The runner's target race pace is ${APP.settings.targetPace} min/km` : ""}
+- When asked to add paces to the plan, include ALL weeks in the plan-change block with appropriate paces for each workout type
 
 ${context}`
 
@@ -1351,6 +1431,7 @@ ${context}`
 				document.getElementById("setting-race-date").value = APP.settings.raceDate || ""
 				document.getElementById("setting-start-date").value = APP.settings.startDate || ""
 				document.getElementById("setting-api-key").value = APP.settings.apiKey || ""
+				document.getElementById("setting-target-pace").value = APP.settings.targetPace || ""
 				// Race distance
 				const dist = APP.settings.raceDistance || 21.1
 				const select = document.getElementById("setting-race-distance")
@@ -1398,15 +1479,34 @@ ${context}`
 				const oldStart = APP.settings.startDate
 				const oldRace = APP.settings.raceDate
 				const oldDist = APP.settings.raceDistance
+				const oldPace = APP.settings.targetPace
 				APP.settings.raceDate = document.getElementById("setting-race-date").value
 				APP.settings.startDate = document.getElementById("setting-start-date").value
 				APP.settings.apiKey = document.getElementById("setting-api-key").value.trim()
+				APP.settings.targetPace = document.getElementById("setting-target-pace").value.trim()
 				// Race distance
 				const distSelect = document.getElementById("setting-race-distance").value
 				APP.settings.raceDistance = distSelect === "custom" ? parseFloat(document.getElementById("setting-custom-distance").value) || 21.1 : parseFloat(distSelect)
 				saveData(APP)
 				updateHeaderLabel()
 				closeSettings()
+
+				// Backfill paces on existing plan when target pace changes
+				const paceChanged = oldPace !== APP.settings.targetPace
+				if (paceChanged && APP.plan && APP.plan.length > 0) {
+					const racePaceSec = parsePace(APP.settings.targetPace)
+					APP.plan.forEach((week) => {
+						week.days.forEach((d) => {
+							if (racePaceSec > 0) {
+								const paceSec = getWorkoutPace(d.type, racePaceSec)
+								d.pace = paceSec > 0 ? formatPace(paceSec) : ""
+							} else {
+								delete d.pace
+							}
+						})
+					})
+					saveData(APP)
+				}
 
 				// If dates or distance changed and there's a plan, prompt to regenerate
 				const datesChanged = oldStart !== APP.settings.startDate || oldRace !== APP.settings.raceDate || oldDist !== APP.settings.raceDistance
@@ -1418,10 +1518,10 @@ ${context}`
 						saveData(APP)
 						showToast(`Plan regenerated for ${newWeeks} weeks`)
 					} else {
-						showToast("Settings saved")
+						showToast(paceChanged ? "Paces updated across plan" : "Settings saved")
 					}
 				} else {
-					showToast("Settings saved")
+					showToast(paceChanged && APP.plan?.length > 0 ? "Paces updated across plan" : "Settings saved")
 				}
 				switchTab(document.querySelector(".tab-active").id.replace("tab-", ""))
 			}
