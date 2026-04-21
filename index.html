@@ -1249,7 +1249,7 @@ RULES:
             </div>
             <p class="text-xs text-gray-400 mb-2">${(data.summary || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>
             <div class="text-xs text-gray-500 mb-2 space-y-1">
-              ${data.changes.map((c) => `<div><strong class="text-gray-400">Week ${c.week}:</strong> ${c.days.map((d) => d.day + " " + d.type + " " + d.distance + "km").join(", ")}</div>`).join("")}
+              ${data.changes.map((c) => `<div><strong class="text-gray-400">Week ${c.week}:</strong> ${c.days.map((d) => d.day + " " + d.type + " " + d.distance + "km" + (d.pace ? " @" + d.pace + "/km" : "")).join(", ")}</div>`).join("")}
             </div>
             ${applied ? '<div class="text-xs text-brand-400 font-medium">Applied to your plan</div>' : `<button onclick="applyPlanChange('${changeId}')" class="w-full bg-amber-500/80 hover:bg-amber-500 text-white text-sm font-medium py-2 rounded-lg transition">Apply Changes</button>`}
           </div>`
@@ -1267,7 +1267,7 @@ RULES:
 					const week = plan.find((w) => w.week === change.week)
 					if (!week) return false
 					if (week.days.length !== change.days.length) return false
-					return change.days.every((d, i) => week.days[i] && week.days[i].day === d.day && week.days[i].type === d.type && week.days[i].distance === d.distance)
+					return change.days.every((d, i) => week.days[i] && week.days[i].day === d.day && week.days[i].type === d.type && week.days[i].distance === d.distance && (week.days[i].pace || "") === (d.pace || ""))
 				})
 			}
 
@@ -1542,7 +1542,17 @@ ${context}`
 			// EXPORT / IMPORT
 			// ============================================================
 			function exportData() {
-				const blob = new Blob([JSON.stringify(APP, null, 2)], { type: "application/json" })
+				const racePaceSec = parsePace(APP.settings.targetPace)
+				const planWithPace = (APP.plan || []).map((w) => ({
+					...w,
+					days: w.days.map((d) => {
+						if (d.pace || !racePaceSec) return d
+						const paceSec = getWorkoutPace(d.type, racePaceSec)
+						return paceSec > 0 ? { ...d, pace: formatPace(paceSec) } : d
+					}),
+				}))
+				const exportPayload = { ...APP, plan: planWithPace }
+				const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" })
 				const url = URL.createObjectURL(blob)
 				const a = document.createElement("a")
 				a.href = url
