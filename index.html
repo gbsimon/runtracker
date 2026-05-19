@@ -640,7 +640,7 @@
 						"anthropic-dangerous-direct-browser-access": "true",
 					},
 					body: JSON.stringify({
-						model: "claude-sonnet-4-20250514",
+						model: "claude-sonnet-4-5-20250929",
 						max_tokens: 4096,
 						system: `You are an expert running coach. Output ONLY a valid JSON array, no other text, no markdown.
 
@@ -1295,12 +1295,17 @@ RULES:
 			function buildCoachContext() {
 				const currentWeek = getCurrentWeek()
 				const currentPlan = getPlan().find((w) => w.week === currentWeek)
-				const nearbyWeeks = getPlan().filter((w) => w.week >= currentWeek - 1 && w.week <= currentWeek + 2)
 
-				// Recent runs (last 14 days)
-				const twoWeeksAgo = new Date()
-				twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14)
-				const recentRuns = APP.runLog.filter((r) => new Date(r.date) >= twoWeeksAgo).sort((a, b) => new Date(b.date) - new Date(a.date))
+				const today = new Date()
+				const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`
+				const todayDow = today.toLocaleDateString("en-US", { weekday: "long" })
+
+				// Index logged runs by ISO date for inline matching
+				const runsByDate = {}
+				APP.runLog.forEach((r) => {
+					if (!runsByDate[r.date]) runsByDate[r.date] = []
+					runsByDate[r.date].push(r)
+				})
 
 				const completedThisWeek = currentPlan ? currentPlan.days.filter((_, i) => APP.completedWorkouts[`${currentWeek}-${i}`]).length : 0
 				const totalThisWeek = currentPlan ? currentPlan.days.length : 0
@@ -1308,23 +1313,52 @@ RULES:
 				const totalWeeks = getPlan().length
 				const raceDate = APP.settings.raceDate || "TBD"
 				const paceInfo = APP.settings.targetPace ? ` Target race pace: ${APP.settings.targetPace} min/km.` : ""
-				let ctx = `RUNNER PROFILE: Beginner runner training for a ${getRaceLabel()} (${getRaceDistance()}km) on ${raceDate}.${paceInfo}\n`
+				let ctx = `TODAY: ${todayISO} (${todayDow}). All dates in this context are ISO YYYY-MM-DD. "Last week" = before ${todayISO}, "next week" = after ${todayISO}.\n`
+				ctx += `RUNNER PROFILE: Beginner runner training for a ${getRaceLabel()} (${getRaceDistance()}km) on ${raceDate}.${paceInfo}\n`
 				ctx += `PLAN: ${totalWeeks} weeks total. CURRENT STATUS: Week ${currentWeek} of ${totalWeeks}. ${completedThisWeek}/${totalThisWeek} workouts completed this week.\n`
 				ctx += `TOTAL LOGGED: ${APP.runLog.length} runs, ${APP.runLog.reduce((s, r) => s + r.distance, 0).toFixed(1)} km total.\n\n`
 
-				// Full plan with date ranges so coach can map calendar dates to week numbers
-				ctx += `FULL PLAN (week → dates → workouts):\n`
+				// Full plan: each day inline with its actual date, status (DONE/TODAY/UPCOMING/MISSED),
+				// and the logged run data when applicable. This is the single source of truth for the coach.
+				ctx += `FULL PLAN (each day shows: date • planned • [logged actuals if any]):\n`
 				getPlan().forEach((w) => {
-					const range = getWeekDateRange(w.week)
-					const marker = w.week === currentWeek ? " ← CURRENT" : ""
-					ctx += `Week ${w.week} [${range}] (${w.phase})${marker}: ${w.days.map((d) => `${d.day} ${d.type} ${d.distance}km${d.pace ? " @" + d.pace + "/km" : ""}`).join(", ")}\n`
+					let weekMarker
+					if (w.week < currentWeek) weekMarker = "PAST"
+					else if (w.week === currentWeek) weekMarker = "CURRENT"
+					else if (w.week === currentWeek + 1) weekMarker = "NEXT"
+					else weekMarker = "FUTURE"
+					ctx += `\nWeek ${w.week} (${w.phase}) — ${weekMarker}:\n`
+					w.days.forEach((d, i) => {
+						const dateISO = getWorkoutDateISO(w.week, d.day)
+						const planned = `${d.type} ${d.distance}km${d.pace ? " @" + d.pace + "/km" : ""}`
+						const logged = runsByDate[dateISO] || []
+						let status
+						if (dateISO < todayISO) status = APP.completedWorkouts[`${w.week}-${i}`] || logged.length ? "DONE" : "MISSED"
+						else if (dateISO === todayISO) status = "TODAY"
+						else status = "UPCOMING"
+						let line = `  ${d.day} ${dateISO} [${status}]: ${planned}`
+						if (logged.length) {
+							const actuals = logged
+								.map((r) => {
+									const pace = r.duration && r.distance ? formatDuration(Math.round(r.duration / r.distance)) : "?"
+									return `${r.distance}km in ${formatDuration(r.duration)} (${pace}/km, effort ${r.effort}/10)${r.notes ? ' — "' + r.notes + '"' : ""}`
+								})
+								.join("; ")
+							line += ` → LOGGED: ${actuals}`
+						}
+						ctx += line + "\n"
+					})
 				})
 
-				if (recentRuns.length > 0) {
-					ctx += `\nRECENT RUNS (last 14 days):\n`
-					recentRuns.forEach((r) => {
+				// Any logged runs that don't fall on a planned day (unplanned/cross-training)
+				const plannedDates = new Set()
+				getPlan().forEach((w) => w.days.forEach((d) => plannedDates.add(getWorkoutDateISO(w.week, d.day))))
+				const orphanRuns = APP.runLog.filter((r) => !plannedDates.has(r.date)).sort((a, b) => b.date.localeCompare(a.date))
+				if (orphanRuns.length) {
+					ctx += `\nUNPLANNED LOGGED RUNS (not on a plan day):\n`
+					orphanRuns.forEach((r) => {
 						const pace = r.duration && r.distance ? formatDuration(Math.round(r.duration / r.distance)) : "?"
-						ctx += `${r.date}: ${r.distance}km in ${formatDuration(r.duration)} (${pace} /km, effort ${r.effort}/10)${r.notes ? " - " + r.notes : ""}\n`
+						ctx += `${r.date}: ${r.distance}km in ${formatDuration(r.duration)} (${pace}/km, effort ${r.effort}/10)${r.notes ? " — " + r.notes : ""}\n`
 					})
 				}
 
@@ -1370,7 +1404,7 @@ When you recommend changing the training plan (due to injury, fatigue, extra ene
 :::
 
 Rules for plan changes:
-- CRITICAL: Use the week-to-date mapping from the FULL PLAN above to find the correct week number for any calendar date the user mentions
+- CRITICAL: Use the FULL PLAN above (each day has its ISO date) to find the correct week number for any calendar date the user mentions. Anchor all relative dates ("today", "this week", "next week", "last week") to the TODAY value at the top of the context — never guess from training data
 - Only include weeks that actually change
 - Day abbreviations: Mon, Tue, Wed, Thu, Fri, Sat, Sun
 - Valid types: Easy Run, Long Run, Tempo Run, Intervals, Race Pace, Shakeout, Rest, or any custom type (e.g. "🏁 10K Race", "🏁 5K Race")
@@ -1398,7 +1432,7 @@ ${context}`
 							"anthropic-dangerous-direct-browser-access": "true",
 						},
 						body: JSON.stringify({
-							model: "claude-sonnet-4-20250514",
+							model: "claude-sonnet-4-5-20250929",
 							max_tokens: 2048,
 							system: systemPrompt,
 							messages: apiMessages,
