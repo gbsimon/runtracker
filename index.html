@@ -123,7 +123,8 @@
 					0 0 0 3px rgba(51, 144, 255, 0.15),
 					0 0 15px rgba(51, 144, 255, 0.1);
 			}
-			input[type="range"] {
+			input[type="range"],
+			input[type="checkbox"] {
 				accent-color: #3390ff;
 			}
 			option {
@@ -203,6 +204,12 @@
 								<div class="spinner"></div>
 								AI Coach is building your plan...
 							</div>
+						</div>
+						<div id="plan-hide-past-row" class="flex items-center justify-end mb-2">
+							<label class="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-300 cursor-pointer select-none transition">
+								<input type="checkbox" id="plan-hide-past" onchange="renderPlan()" class="w-3.5 h-3.5" />
+								Hide past weeks
+							</label>
 						</div>
 						<div id="plan-weeks" class="space-y-2"></div>
 					</div>
@@ -357,6 +364,52 @@
 			</div>
 		</div>
 
+		<!-- Edit Item Modal -->
+		<div id="edit-item-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+			<div class="glass glow w-full max-w-md p-6 fade-in">
+				<div class="flex items-center justify-between mb-5">
+					<h2 class="text-lg font-bold text-white">Edit Workout</h2>
+					<button onclick="closeEditItem()" class="text-gray-500 hover:text-gray-300 text-xl leading-none">&times;</button>
+				</div>
+				<div class="space-y-4">
+					<div class="grid grid-cols-2 gap-3">
+						<div>
+							<label class="block text-sm font-medium text-gray-300 mb-1">Day</label>
+							<select id="edit-item-day" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none">
+								<option value="Mon">Mon</option>
+								<option value="Tue">Tue</option>
+								<option value="Wed">Wed</option>
+								<option value="Thu">Thu</option>
+								<option value="Fri">Fri</option>
+								<option value="Sat">Sat</option>
+								<option value="Sun">Sun</option>
+							</select>
+						</div>
+						<div>
+							<label class="block text-sm font-medium text-gray-300 mb-1">Distance (km)</label>
+							<input type="number" id="edit-item-distance" step="0.1" min="0" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" />
+						</div>
+					</div>
+					<div class="grid grid-cols-2 gap-3 -mt-2">
+						<div>
+							<label class="block text-sm font-medium text-gray-300 mb-1">Type</label>
+							<input type="text" id="edit-item-type" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="Easy Run" />
+						</div>
+						<div>
+							<label class="block text-sm font-medium text-gray-300 mb-1">Pace</label>
+							<input type="text" id="edit-item-pace" inputmode="numeric" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="6:00" pattern="[0-9]+:[0-5][0-9]" />
+							<p class="text-xs text-gray-500 mt-1">min/km, optional</p>
+						</div>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-300 mb-1">Notes</label>
+						<input type="text" id="edit-item-notes" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-300 focus:border-brand-400 outline-none" placeholder="Optional notes" />
+					</div>
+				</div>
+				<button onclick="saveEditItem()" class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-2.5 rounded-xl text-sm mt-5 transition glow-sm">Save Changes</button>
+			</div>
+		</div>
+
 		<!-- Toast -->
 		<div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 glass text-brand-300 text-sm px-5 py-2.5 rounded-xl z-50 fade-in font-medium glow-sm"></div>
 
@@ -375,6 +428,7 @@
 					runLog: [],
 					chatHistory: [],
 					completedWorkouts: {},
+					skippedWorkouts: {},
 					_updatedAt: Date.now(),
 				}
 			}
@@ -476,9 +530,18 @@
 			}
 			APP._durationInSeconds = true
 
+			// Migrate: add skippedWorkouts map for data saved before the skip feature existed
+			if (!APP.skippedWorkouts) {
+				APP.skippedWorkouts = {}
+				saveData(APP)
+			}
+
 			// Transient (not persisted): which planned workout a Plan-page "Log" click came from,
 			// so logRun can complete/move that exact workout when the date is changed.
 			let pendingLogOrigin = null
+
+			// Transient (not persisted): which planned workout the edit-item modal is editing.
+			let editingItem = null
 
 			// ============================================================
 			// TRAINING PLAN GENERATOR (Dynamic)
@@ -723,6 +786,7 @@ RULES:
 					showToast(`Generated ${numWeeks}-week plan`)
 				}
 				APP.completedWorkouts = {}
+				APP.skippedWorkouts = {}
 				saveData(APP)
 				renderPlan()
 			}
@@ -858,8 +922,66 @@ RULES:
 					delete APP.completedWorkouts[key]
 				} else {
 					APP.completedWorkouts[key] = true
+					delete APP.skippedWorkouts[key] // mutual exclusion: marking done clears skip
 				}
 				saveData(APP)
+				renderPlan()
+			}
+
+			function toggleSkip(weekNum, dayIdx) {
+				const key = `${weekNum}-${dayIdx}`
+				if (APP.skippedWorkouts[key]) {
+					delete APP.skippedWorkouts[key]
+				} else {
+					APP.skippedWorkouts[key] = true
+					delete APP.completedWorkouts[key] // mutual exclusion: skipping clears completion
+				}
+				saveData(APP)
+				renderPlan()
+			}
+
+			function openEditItem(weekNum, dayIdx) {
+				const week = getPlan().find((w) => w.week === weekNum)
+				const day = week && week.days[dayIdx]
+				if (!day) return
+				editingItem = { week: weekNum, dayIdx }
+				document.getElementById("edit-item-day").value = day.day
+				document.getElementById("edit-item-type").value = day.type || ""
+				document.getElementById("edit-item-distance").value = day.distance || 0
+				document.getElementById("edit-item-pace").value = day.pace || ""
+				document.getElementById("edit-item-notes").value = day.notes || ""
+				document.getElementById("edit-item-modal").classList.remove("hidden")
+			}
+
+			function closeEditItem() {
+				editingItem = null
+				document.getElementById("edit-item-modal").classList.add("hidden")
+			}
+
+			function saveEditItem() {
+				if (!editingItem) return
+				const { week: weekNum, dayIdx } = editingItem
+				const week = APP.plan.find((w) => w.week === weekNum)
+				const day = week && week.days[dayIdx]
+				if (!day) { closeEditItem(); return }
+
+				const distance = parseFloat(document.getElementById("edit-item-distance").value)
+				if (isNaN(distance) || distance < 0) {
+					showToast("Distance must be a non-negative number")
+					return
+				}
+
+				day.day = document.getElementById("edit-item-day").value
+				day.type = document.getElementById("edit-item-type").value.trim() || "Easy Run"
+				day.distance = distance
+				day.notes = document.getElementById("edit-item-notes").value.trim()
+				const pace = document.getElementById("edit-item-pace").value.trim()
+				if (pace) day.pace = pace
+				else delete day.pace
+
+				saveData(APP)
+				closeEditItem()
+				showToast("Workout updated")
 				renderPlan()
 			}
 
@@ -895,6 +1017,11 @@ RULES:
 					}
 				}
 				return null
+			}
+
+			// A week is "finished" once every day is either completed or deliberately skipped.
+			function isWeekFinished(week) {
+				return week.days.every((_, i) => APP.completedWorkouts[`${week.week}-${i}`] || APP.skippedWorkouts[`${week.week}-${i}`])
 			}
 
 			function renderPlan() {
@@ -944,14 +1071,29 @@ RULES:
 					generatePrompt.classList.add("hidden")
 				}
 
+				document.getElementById("plan-hide-past-row").classList.toggle("hidden", needsPlan)
+
+				const hidePastWeeks = document.getElementById("plan-hide-past").checked
+				const today = new Date()
+				today.setHours(0, 0, 0, 0)
+
 				const container = document.getElementById("plan-weeks")
 				container.innerHTML = getPlan()
 					.map((week) => {
 						const isCurrent = week.week === currentWeek
 						const isPast = week.week < currentWeek
 						const isOpen = isCurrent
+
+						// A week is "fully past" once its last day (Sunday) is before today.
+						// The current week always stays visible, even if the plan has run past its end.
+						const weekEnd = getWeekMonday(week.week)
+						weekEnd.setDate(weekEnd.getDate() + 6)
+						if (hidePastWeeks && weekEnd < today && !isCurrent) return ""
+
 						const weekCompleted = week.days.every((_, i) => APP.completedWorkouts[`${week.week}-${i}`])
-						const weekTotal = week.days.reduce((s, d) => s + d.distance, 0)
+						const skippedCount = week.days.reduce((s, _, i) => s + (APP.skippedWorkouts[`${week.week}-${i}`] ? 1 : 0), 0)
+						const weekFinished = !weekCompleted && isWeekFinished(week)
+						const weekTotal = week.days.reduce((s, d, i) => s + (APP.skippedWorkouts[`${week.week}-${i}`] ? 0 : d.distance), 0)
 
 						const phaseColors = {
 							"Base Building": "bg-blue-500/15 text-blue-400 border border-blue-500/20",
@@ -963,7 +1105,7 @@ RULES:
 						}
 
 						return `
-      <div class="card overflow-hidden ${isCurrent ? "week-current" : ""} ${isPast && weekCompleted ? "opacity-40" : ""}">
+      <div class="card overflow-hidden ${isCurrent ? "week-current" : ""} ${isPast && (weekCompleted || weekFinished) ? "opacity-40" : ""}">
         <button onclick="toggleWeek(${week.week})" class="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-white/5 transition">
           <span id="week-${week.week}-arrow" class="text-gray-500 text-xs w-3">${isOpen ? "▾" : "▸"}</span>
           <div class="flex-1 min-w-0">
@@ -971,6 +1113,7 @@ RULES:
               <span class="font-bold text-sm text-white">Week ${week.week}</span>
               <span class="text-[11px] px-2 py-0.5 rounded-md font-medium ${phaseColors[week.phase] || "bg-white/10 text-gray-400 border border-white/10"}">${week.phase}</span>
               ${weekCompleted ? '<span class="text-brand-400 text-sm">✓</span>' : ""}
+              ${weekFinished ? `<span class="text-[11px] px-2 py-0.5 rounded-md font-medium bg-white/10 text-gray-400 border border-white/10">Finished${skippedCount > 0 ? ` · ${skippedCount} skipped` : ""}</span>` : ""}
               ${isCurrent ? '<span class="text-[11px] bg-brand-600 text-white px-2 py-0.5 rounded-md font-semibold glow-sm">Current</span>' : ""}
             </div>
             <span class="text-xs text-gray-400 mt-0.5 block">${getWeekDateRange(week.week)} • ${weekTotal.toFixed(1)} km</span>
@@ -980,6 +1123,7 @@ RULES:
           ${week.days
 						.map((d, i) => {
 							const done = APP.completedWorkouts[`${week.week}-${i}`]
+							const skipped = APP.skippedWorkouts[`${week.week}-${i}`]
 							const typeColors = {
 								"Easy Run": "text-emerald-400",
 								"Long Run": "text-blue-400",
@@ -1003,21 +1147,33 @@ RULES:
 								})
 								.join("")
 							return `
-              <div class="flex items-start gap-3 py-2 border-t border-white/5 ${done && logged.length === 0 ? "opacity-35" : ""}">
+              <div class="flex items-start gap-3 py-2 border-t border-white/5 ${(done && logged.length === 0) || skipped ? "opacity-35" : ""}">
                 <button onclick="toggleWorkout(${week.week}, ${i})" class="mt-0.5 w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition ${done ? "bg-brand-500 border-brand-500 text-white" : "border-white/15 hover:border-brand-400"}">
                   ${done ? '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>' : ""}
                 </button>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
-                    <span class="text-xs font-medium text-gray-400 w-24">${d.day} ${getWorkoutDate(week.week, d.day)}</span>
-                    <span class="text-sm font-semibold ${typeColor}">${d.type}</span>
-                    ${d.distance > 0 ? `<span class="text-xs text-gray-400 font-medium">${d.distance} km</span>` : ""}
+                    <span class="text-xs font-medium text-gray-400 w-24 ${skipped ? "line-through" : ""}">${d.day} ${getWorkoutDate(week.week, d.day)}</span>
+                    <span class="text-sm font-semibold ${typeColor} ${skipped ? "line-through" : ""}">${d.type}</span>
+                    ${d.distance > 0 ? `<span class="text-xs text-gray-400 font-medium ${skipped ? "line-through" : ""}">${d.distance} km</span>` : ""}
                     ${displayPace ? `<span class="text-xs text-gray-500 font-medium">@ ${displayPace}/km</span>` : ""}
+                    ${skipped ? '<span class="text-[11px] px-2 py-0.5 rounded-md font-medium bg-white/10 text-gray-400 border border-white/10">Skipped</span>' : ""}
                   </div>
-                  <p class="text-xs text-gray-500 mt-0.5">${d.notes}</p>
+                  <p class="text-xs text-gray-500 mt-0.5 ${skipped ? "line-through" : ""}">${d.notes}</p>
                   ${loggedHtml}
                 </div>
-                ${!done && d.distance > 0 ? `<button onclick="event.stopPropagation(); prefillAndLog(${week.week}, ${i}, ${d.distance}, '${d.type}', '${d.day}', '${displayPace}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold px-2 py-1 rounded-lg hover:bg-brand-600/15 transition flex-shrink-0" title="Log this workout">Log</button>` : ""}
+                <div class="flex items-center gap-0.5 flex-shrink-0">
+                  ${!done && !skipped && d.distance > 0 ? `<button onclick="event.stopPropagation(); prefillAndLog(${week.week}, ${i}, ${d.distance}, '${d.type}', '${d.day}', '${displayPace}')" class="text-xs text-brand-400 hover:text-brand-300 font-semibold px-2 py-1 rounded-lg hover:bg-brand-600/15 transition" title="Log this workout">Log</button>` : ""}
+                  <button onclick="event.stopPropagation(); toggleSkip(${week.week}, ${i})" class="p-1.5 rounded-lg hover:bg-white/5 transition ${skipped ? "text-amber-400 hover:text-amber-300" : "text-gray-500 hover:text-amber-400"}" title="${skipped ? "Undo skip" : "Skip"}">
+                    ${skipped
+											? '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3"/></svg>'
+											: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 105.636 5.636a9 9 0 0012.728 12.728zM5.636 5.636l12.728 12.728"/></svg>'
+										}
+                  </button>
+                  <button onclick="event.stopPropagation(); openEditItem(${week.week}, ${i})" class="p-1.5 rounded-lg hover:bg-white/5 text-gray-500 hover:text-brand-400 transition" title="Edit workout">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                  </button>
+                </div>
               </div>
             `
 						})
@@ -1102,6 +1258,7 @@ RULES:
 					const weekIdx = APP.plan.findIndex((w) => w.week === week)
 					if (weekIdx !== -1 && APP.plan[weekIdx].days[dayIdx]) {
 						APP.completedWorkouts[`${week}-${dayIdx}`] = true
+						delete APP.skippedWorkouts[`${week}-${dayIdx}`] // logging supersedes a skip
 						matched = true
 						if (run.date !== plannedDate && planWeekOf(run.date) === week) {
 							APP.plan[weekIdx].days[dayIdx].day = new Date(run.date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short" })
@@ -1114,6 +1271,7 @@ RULES:
 					const matchKey = findMatchingWorkout(run.date)
 					if (matchKey) {
 						APP.completedWorkouts[matchKey] = true
+						delete APP.skippedWorkouts[matchKey] // logging supersedes a skip
 						matched = true
 					}
 				}
@@ -1318,7 +1476,14 @@ RULES:
             </div>
             <p class="text-xs text-gray-400 mb-2">${(data.summary || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>
             <div class="text-xs text-gray-500 mb-2 space-y-1">
-              ${data.changes.map((c) => `<div><strong class="text-gray-400">Week ${c.week}:</strong> ${c.days.map((d) => d.day + " " + d.type + " " + d.distance + "km" + (d.pace ? " @" + d.pace + "/km" : "")).join(", ")}</div>`).join("")}
+              ${data.changes
+								.map((c) => {
+									const parts = []
+									if (Array.isArray(c.days)) parts.push(c.days.map((d) => d.day + " " + d.type + " " + d.distance + "km" + (d.pace ? " @" + d.pace + "/km" : "")).join(", "))
+									if (Array.isArray(c.skips)) parts.push(c.skips.map((s) => (s.skipped ? "Skip " : "Unskip ") + s.day).join(", "))
+									return `<div><strong class="text-gray-400">Week ${c.week}:</strong> ${parts.join("; ")}</div>`
+								})
+								.join("")}
             </div>
             ${applied ? '<div class="text-xs text-brand-400 font-medium">Applied to your plan</div>' : `<button onclick="applyPlanChange('${changeId}')" class="w-full bg-amber-500/80 hover:bg-amber-500 text-white text-sm font-medium py-2 rounded-lg transition">Apply Changes</button>`}
           </div>`
@@ -1335,9 +1500,22 @@ RULES:
 				return data.changes.every((change) => {
 					const week = plan.find((w) => w.week === change.week)
 					if (!week) return false
-					if (!Array.isArray(change.days)) return false
-					if (week.days.length !== change.days.length) return false
-					return change.days.every((d, i) => week.days[i] && week.days[i].day === d.day && week.days[i].type === d.type && week.days[i].distance === d.distance && (week.days[i].pace || "") === (d.pace || ""))
+					if (change.days !== undefined) {
+						if (!Array.isArray(change.days)) return false
+						if (week.days.length !== change.days.length) return false
+						const daysMatch = change.days.every((d, i) => week.days[i] && week.days[i].day === d.day && week.days[i].type === d.type && week.days[i].distance === d.distance && (week.days[i].pace || "") === (d.pace || ""))
+						if (!daysMatch) return false
+					}
+					if (Array.isArray(change.skips)) {
+						const skipsMatch = change.skips.every((s) => {
+							const idx = week.days.findIndex((d) => d.day === s.day)
+							if (idx === -1) return false
+							const isSkipped = !!APP.skippedWorkouts[`${change.week}-${idx}`]
+							return isSkipped === !!s.skipped
+						})
+						if (!skipsMatch) return false
+					}
+					return true
 				})
 			}
 
@@ -1346,13 +1524,30 @@ RULES:
 				if (!data) return
 
 				data.changes.forEach((change) => {
-					if (!Array.isArray(change.days)) return
 					const weekIdx = APP.plan.findIndex((w) => w.week === change.week)
-					if (weekIdx !== -1) {
+					if (weekIdx === -1) return
+
+					if (Array.isArray(change.days)) {
 						APP.plan[weekIdx].days = change.days.map((d) => {
 							const day = { day: d.day, type: d.type, distance: d.distance, notes: d.notes || "" }
 							if (d.pace) day.pace = d.pace
 							return day
+						})
+					}
+
+					// Apply skips after days, so day abbrev → index maps against the (possibly just-replaced) days array.
+					if (Array.isArray(change.skips)) {
+						const days = APP.plan[weekIdx].days
+						change.skips.forEach((s) => {
+							const idx = days.findIndex((d) => d.day === s.day)
+							if (idx === -1) return
+							const key = `${change.week}-${idx}`
+							if (s.skipped) {
+								APP.skippedWorkouts[key] = true
+								delete APP.completedWorkouts[key] // mutual exclusion
+							} else {
+								delete APP.skippedWorkouts[key]
+							}
 						})
 					}
 				})
@@ -1389,7 +1584,7 @@ RULES:
 				ctx += `PLAN: ${totalWeeks} weeks total. CURRENT STATUS: Week ${currentWeek} of ${totalWeeks}. ${completedThisWeek}/${totalThisWeek} workouts completed this week.\n`
 				ctx += `TOTAL LOGGED: ${APP.runLog.length} runs, ${APP.runLog.reduce((s, r) => s + r.distance, 0).toFixed(1)} km total.\n\n`
 
-				// Full plan: each day inline with its actual date, status (DONE/TODAY/UPCOMING/MISSED),
+				// Full plan: each day inline with its actual date, status (DONE/TODAY/UPCOMING/MISSED/SKIPPED),
 				// and the logged run data when applicable. This is the single source of truth for the coach.
 				ctx += `FULL PLAN (each day shows: date • planned • [logged actuals if any]):\n`
 				getPlan().forEach((w) => {
@@ -1404,7 +1599,8 @@ RULES:
 						const planned = `${d.type} ${d.distance}km${d.pace ? " @" + d.pace + "/km" : ""}`
 						const logged = runsByDate[dateISO] || []
 						let status
-						if (dateISO < todayISO) status = APP.completedWorkouts[`${w.week}-${i}`] || logged.length ? "DONE" : "MISSED"
+						if (APP.skippedWorkouts[`${w.week}-${i}`]) status = "SKIPPED"
+						else if (dateISO < todayISO) status = APP.completedWorkouts[`${w.week}-${i}`] || logged.length ? "DONE" : "MISSED"
 						else if (dateISO === todayISO) status = "TODAY"
 						else status = "UPCOMING"
 						let line = `  ${d.day} ${dateISO} [${status}]: ${planned}`
@@ -1474,10 +1670,20 @@ When you recommend changing the training plan (due to injury, fatigue, extra ene
 ], "summary": "Reduced weeks 5-6 for shin recovery"}
 :::
 
+Each change entry can also carry an optional "skips" list to mark specific days as skipped (deliberately not doing them) without editing their planned type/distance — e.g. when the runner says they can't make a specific run this week:
+
+:::plan-change
+{"changes": [
+  {"week": 5, "skips": [{"day": "Thu", "skipped": true}]}
+], "summary": "Skipped Thursday's run — you're traveling"}
+:::
+
+"days" and "skips" can appear together in the same week entry ("days" is applied first, then "skips" — so skip days by their NEW position if you're also changing that week's days). A change entry may include only "skips" and no "days" at all.
+
 Rules for plan changes:
 - CRITICAL: Use the FULL PLAN above (each day has its ISO date) to find the correct week number for any calendar date the user mentions. Anchor all relative dates ("today", "this week", "next week", "last week") to the TODAY value at the top of the context — never guess from training data
 - Only include weeks that actually change
-- When you change a week, include EVERY day of that week — applying a change replaces that week's days, so any day you omit is removed
+- When you change a week's "days", include EVERY day of that week — applying a change replaces that week's days, so any day you omit is removed. This does not apply to "skips", which only touches the days you list
 - Day abbreviations: Mon, Tue, Wed, Thu, Fri, Sat, Sun
 - Valid types: Easy Run, Long Run, Tempo Run, Intervals, Race Pace, Shakeout, Rest, or any custom type (e.g. "🏁 10K Race", "🏁 5K Race")
 - When adding a tune-up race: adjust the week before (lighter) and after (recovery) too
@@ -1486,6 +1692,8 @@ Rules for plan changes:
 - You can change distances, swap workout types, add rest days, or add extra runs
 - Include a "pace" field (string, format "M:SS" e.g. "6:00") for each workout with a suggested pace in min/km${APP.settings.targetPace ? `. The runner's target race pace is ${APP.settings.targetPace} min/km` : ""}
 - When asked to add paces to the plan, include ALL weeks in the plan-change block with appropriate paces for each workout type
+- Use "skips" (set skipped: true) when the runner can't do a specific planned workout but the plan itself shouldn't change — e.g. a one-off missed day from travel or a minor scheduling conflict. Use "skipped: false" in a "skips" entry to undo a previous skip
+- Days marked [SKIPPED] in the FULL PLAN below were deliberately skipped by the runner or coach — treat them as intentional, not as missed or a sign of poor adherence
 
 ${context}`
 
@@ -1690,6 +1898,7 @@ ${context}`
 						const imported = JSON.parse(ev.target.result)
 						if (imported.settings && imported.runLog !== undefined) {
 							APP = imported
+							if (!APP.skippedWorkouts) APP.skippedWorkouts = {}
 							saveData(APP)
 							showToast("Data imported successfully")
 							closeSettings()
