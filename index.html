@@ -207,7 +207,7 @@
 						</div>
 						<div id="plan-hide-past-row" class="flex items-center justify-end mb-2">
 							<label class="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-300 cursor-pointer select-none transition">
-								<input type="checkbox" id="plan-hide-past" onchange="renderPlan()" class="w-3.5 h-3.5" />
+								<input type="checkbox" id="plan-hide-past" onchange="toggleHidePastWeeks(this.checked)" class="w-3.5 h-3.5" />
 								Hide past weeks
 							</label>
 						</div>
@@ -424,7 +424,7 @@
 
 			function defaultData() {
 				return {
-					settings: { startDate: "2026-03-23", raceDate: "2026-10-18", raceDistance: 21.1, targetPace: "", apiKey: "" },
+					settings: { startDate: "2026-03-23", raceDate: "2026-10-18", raceDistance: 21.1, targetPace: "", apiKey: "", hidePastWeeks: true },
 					runLog: [],
 					chatHistory: [],
 					completedWorkouts: {},
@@ -940,6 +940,12 @@ RULES:
 				renderPlan()
 			}
 
+			function toggleHidePastWeeks(checked) {
+				APP.settings.hidePastWeeks = checked
+				saveData(APP)
+				renderPlan()
+			}
+
 			function openEditItem(weekNum, dayIdx) {
 				const week = getPlan().find((w) => w.week === weekNum)
 				const day = week && week.days[dayIdx]
@@ -1073,7 +1079,9 @@ RULES:
 
 				document.getElementById("plan-hide-past-row").classList.toggle("hidden", needsPlan)
 
-				const hidePastWeeks = document.getElementById("plan-hide-past").checked
+				// Persisted preference; absent (pre-feature data) means hidden by default.
+				const hidePastWeeks = APP.settings.hidePastWeeks !== false
+				document.getElementById("plan-hide-past").checked = hidePastWeeks
 				const today = new Date()
 				today.setHours(0, 0, 0, 0)
 
