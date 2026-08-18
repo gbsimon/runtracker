@@ -13,6 +13,7 @@ import { upsertDailyMetrics } from "../daily-metrics";
 import { findMatchingWorkout, getPlan, markWorkoutComplete } from "../plan";
 import { mergeRunMetrics } from "../run-metrics";
 import { listRuns, type RunRecord } from "../runs";
+import { getExtraRunFragments } from "../user-prefs";
 import { fetchRunWeather, mergeWeather, needsRemoteWeather, type RunWeather } from "../weather";
 import { type ParsedWorkout, parseHaePayload, workoutRunFields, workoutStreamRows } from "./hae";
 import { hasMetrics, parseHaeMetricsPayload } from "./metrics";
@@ -39,6 +40,12 @@ export type WorkoutOutcome = {
 	runId?: string;
 	/** Why it was skipped, or what went wrong. */
 	reason?: string;
+	/**
+	 * The workout's localized name, recorded on skips so the Sync tab can list
+	 * what was filtered out and offer to allow the type. Summaries written
+	 * before this existed simply don't carry it.
+	 */
+	name?: string;
 	rule?: ReconcileRule;
 	localDate?: string;
 	distanceKm?: number;
@@ -248,6 +255,12 @@ async function ingestWorkout(
 export type IngestOptions = {
 	/** Let a workout we already have gain what a newer parser can now read. */
 	enrich?: boolean;
+	/**
+	 * The user's own run-name allowlist. Loaded from their preferences when the
+	 * caller doesn't pass it — a replay of many events reads it once and hands
+	 * it down rather than re-reading it per payload.
+	 */
+	extraRunFragments?: readonly string[];
 };
 
 /**
@@ -280,11 +293,18 @@ export async function processHaePayload(userId: string, raw: unknown, options: I
 		}
 	}
 
-	const parsed = parseHaePayload(raw);
+	const extraRunFragments = options.extraRunFragments ?? (await getExtraRunFragments(userId));
+	const parsed = parseHaePayload(raw, { extraRunFragments });
 	summary.workouts = parsed.workouts.length + parsed.skipped.length;
 
 	for (const skipped of parsed.skipped) {
-		record(summary, { externalId: skipped.externalId, status: "skipped", reason: skipped.reason });
+		record(summary, {
+			externalId: skipped.externalId,
+			status: "skipped",
+			reason: skipped.reason,
+			name: skipped.name ?? undefined,
+			localDate: skipped.localDate ?? undefined,
+		});
 	}
 
 	if (parsed.workouts.length === 0) return summary;
@@ -364,9 +384,15 @@ export async function reprocessIngestEvents(userId: string, isOwner: boolean): P
 	const total = emptySummary();
 	let claimed = 0;
 
+	// Read once for the whole replay: every event here belongs to this user, so
+	// they all parse against the same allowlist. This is also what makes
+	// "allow this type" retroactive — the fragment is saved first, then the
+	// stored payloads are replayed through a parser that now accepts it.
+	const extraRunFragments = await getExtraRunFragments(userId);
+
 	for (const event of pending) {
 		if (event.userId === null) claimed += 1;
-		const summary = await processIngestEvent(event.id, userId, event.raw, { enrich: true });
+		const summary = await processIngestEvent(event.id, userId, event.raw, { enrich: true, extraRunFragments });
 		total.workouts += summary.workouts;
 		total.imported += summary.imported;
 		total.reconciled += summary.reconciled;

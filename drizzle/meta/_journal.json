@@ -36,6 +36,13 @@
       "when": 1786995728053,
       "tag": "0004_known_guardian",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787020403776,
+      "tag": "0005_giant_karen_page",
+      "breakpoints": true
     }
   ]
 }

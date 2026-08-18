@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { type ChatSendKey, chatKeyAction, DEFAULT_CHAT_SEND_KEY, sendKeyHint } from "@/lib/chat-send-key";
 import { type CoachChatMessage, newestExchangesFirst } from "@/lib/chat-view";
 import { clearChatAction } from "@/lib/coach-actions";
 import { newestChangeMessageId, planChangesIn, type PlanSnapshot } from "@/lib/plan-change";
@@ -29,11 +30,24 @@ export function CoachChat({
 	initialMessages,
 	plan,
 	olderCount = 0,
+	sendKey = DEFAULT_CHAT_SEND_KEY,
+	apple = true,
 }: {
 	initialMessages: CoachChatMessage[];
 	plan: PlanSnapshot | null;
 	/** Messages older than the rendered window — see `CHAT_VIEW_LIMIT`. */
 	olderCount?: number;
+	/**
+	 * A prop rather than state, so saving it on Settings reaches the composer
+	 * through the layout revalidation without remounting the thread.
+	 */
+	sendKey?: ChatSendKey;
+	/**
+	 * Sniffed server-side from the User-Agent, and only ever the hint's wording:
+	 * Ctrl+Enter sends on a Mac too, so getting this wrong costs a label, not a
+	 * keystroke.
+	 */
+	apple?: boolean;
 }) {
 	// Seeded once: this component owns the thread from here on, so a
 	// `router.refresh()` after applying a plan change (which is what makes the
@@ -166,42 +180,46 @@ export function CoachChat({
 				</button>
 			</div>
 
-			<form onSubmit={onSubmit} className="mb-3 flex flex-shrink-0 items-end gap-2">
-				<textarea
-					ref={inputRef}
-					rows={1}
-					name="message"
-					aria-label="Message your coach"
-					placeholder="Ask your coach anything…"
-					maxLength={4000}
-					disabled={sending}
-					onInput={(event) => {
-						const element = event.currentTarget;
-						element.style.height = "auto";
-						element.style.height = `${element.scrollHeight}px`;
-					}}
-					onKeyDown={(event) => {
-						// Enter sends; Shift+Enter is a newline.
-						if (event.key === "Enter" && !event.shiftKey) {
+			<form onSubmit={onSubmit} className="mb-3 flex-shrink-0">
+				<div className="flex items-end gap-2">
+					<textarea
+						ref={inputRef}
+						rows={1}
+						name="message"
+						aria-label="Message your coach"
+						placeholder="Ask your coach anything…"
+						maxLength={4000}
+						disabled={sending}
+						onInput={(event) => {
+							// Grows with the text, then `max-h-32` caps it and the
+							// textarea scrolls — which is the normal case once Enter
+							// writes newlines instead of sending.
+							const element = event.currentTarget;
+							element.style.height = "auto";
+							element.style.height = `${element.scrollHeight}px`;
+						}}
+						onKeyDown={(event) => {
+							if (chatKeyAction(sendKey, event) !== "send") return;
 							event.preventDefault();
 							event.currentTarget.form?.requestSubmit();
-						}
-					}}
-					className="max-h-32 flex-1 resize-none rounded-xl border px-3 py-2 text-sm outline-none"
-				/>
-				<button
-					type="submit"
-					disabled={sending}
-					className="glow-sm rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
-				>
-					{sending ? "…" : "Send"}
-				</button>
+						}}
+						className="max-h-32 flex-1 resize-none overflow-y-auto rounded-xl border px-3 py-2 text-sm outline-none"
+					/>
+					<button
+						type="submit"
+						disabled={sending}
+						className="glow-sm rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+					>
+						{sending ? "…" : "Send"}
+					</button>
+				</div>
+				<p className="mt-1 text-right text-xs text-gray-600">{sendKeyHint(sendKey, apple)}</p>
 			</form>
 
 			{/* Newest exchange first, directly under the composer. */}
 			<div
 				ref={threadRef}
-				className="max-h-[55vh] flex-1 space-y-4 overflow-y-auto pr-1 lg:max-h-[calc(100vh-17rem)]"
+				className="max-h-[55vh] flex-1 space-y-4 overflow-y-auto pr-1 lg:max-h-[calc(100vh-18.25rem)]"
 				style={{ overscrollBehavior: "contain" }}
 			>
 				{newestFirst.map((exchange, index) => (

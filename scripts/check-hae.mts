@@ -10,9 +10,14 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import {
+	foldRunName,
+	isRunName,
+	MAX_EXTRA_RUN_FRAGMENTS,
+	normalizeRunFragments,
 	type ParsedWorkout,
 	parseHaePayload,
 	parseHaeTimestamp,
+	RUN_NAME_FRAGMENTS,
 	workoutRunFields,
 	workoutStreamRows,
 } from "../src/lib/ingest/hae.ts";
@@ -241,14 +246,16 @@ section("Splits — derived per kilometre");
 	close("Aug 12 splits sum ≈ its distance", tempoTotal, tempo.distanceM, tempo.distanceM * 0.01);
 }
 
-section("Localized units and names can't change the result");
+section("Localized units can't change the result");
 {
 	// A French device sends `"pas"` for steps and mislabels km/h as `"km"`.
-	// Rewriting every units string and every name to nonsense must be a no-op.
+	// Rewriting every units string, location and source to nonsense must be a
+	// no-op. `name` is deliberately left alone — it is the one localized string
+	// the parser reads, and only to decide the workout's type.
 	const scrambled = JSON.parse(
 		JSON.stringify(payload, (key, value) => {
 			if (key === "units") return "≪unité inconnue≫";
-			if (key === "name" || key === "location" || key === "source") return "≪localisé≫";
+			if (key === "location" || key === "source") return "≪localisé≫";
 			return value;
 		}),
 	);
@@ -262,7 +269,180 @@ section("Localized units and names can't change the result");
 		JSON.stringify(rerun.workouts.map((w) => w.streams)) === JSON.stringify(parsed.workouts.map((w) => w.streams)),
 		true,
 	);
-	eq("localized name carried through, not matched on", rerun.workouts[0].name, "≪localisé≫");
+	eq("localized name carried through verbatim", rerun.workouts[0].name, "Extérieur Course");
+}
+
+section("Run-type filter — the localized name is the only thing that states the type");
+{
+	/** One workout with a route and a distance series: everything but the type says "run". */
+	const typed = (name: unknown) => ({
+		data: {
+			workouts: [
+				{
+					...(name === undefined ? {} : { name }),
+					id: "typed-1",
+					start: "2026-08-14 07:00:00 -0400",
+					end: "2026-08-14 07:45:00 -0400",
+					duration: 2700,
+					distance: { qty: 5, units: "km" },
+					route: [{ latitude: 45.5, longitude: -73.6, altitude: 30, speed: 2.5, timestamp: "2026-08-14 07:00:01 -0400" }],
+					walkingAndRunningDistance: [{ qty: 5, date: "2026-08-14 07:44:00 -0400", units: "km" }],
+				},
+			],
+		},
+	});
+	const verdict = (name: unknown) => {
+		const result = parseHaePayload(typed(name));
+		return { accepted: result.workouts.length === 1, reason: result.skipped[0]?.reason ?? "" };
+	};
+
+	// Accepted — English and French, indoor and out, accented and not.
+	for (const name of [
+		"Extérieur Course", // what Simon's own watch actually sends
+		"Course en extérieur",
+		"Course à pied",
+		"Course de trail",
+		"Outdoor Run",
+		"Indoor Run",
+		"Trail Running",
+		"Jogging",
+		"COURSE À PIED", // shouting is still running
+		"course a pied", // …and so is an unaccented keyboard
+	]) {
+		eq(`accepted: ${name}`, verdict(name).accepted, true);
+	}
+
+	// Rejected — every one of these is a workout type the automation forwards.
+	for (const name of [
+		"Marche",
+		"Outdoor Walk",
+		"Vélo",
+		"Cycling",
+		"Randonnée",
+		"Randonnee", // the same hike with the accent stripped, still not a run
+		"Hiking",
+		"Yoga",
+		"Natation",
+		"Swimming",
+		"Exercice de respiration",
+	]) {
+		const { accepted, reason } = verdict(name);
+		eq(`rejected: ${name}`, accepted, false);
+		eq(`…and the reason names it`, reason, `workout type "${name}" is not a run`);
+	}
+
+	// A walk carries a route and a distance series exactly like a run does — this
+	// is the case the old route-or-distance gate could never catch.
+	const walk = verdict("Marche");
+	eq("a walk with a full GPS track is still skipped", walk.accepted, false);
+
+	// No name, no verdict: skipped rather than guessed at. The raw payload is
+	// stored, so a name we can't read is recoverable by reprocessing.
+	for (const [label, name] of [
+		["missing", undefined],
+		["empty", ""],
+		["whitespace", "   "],
+		["non-string", 42],
+	] as const) {
+		const { accepted, reason } = verdict(name);
+		eq(`skipped when the name is ${label}`, accepted, false);
+		eq(`…with the unnamed reason`, reason, "unnamed workout — cannot verify it is a run");
+	}
+
+	// The type gate runs first, so a walk is reported as a walk rather than as
+	// missing data — but a genuine run with nothing recorded still hits the
+	// second gate, unchanged.
+	eq("the type gate reports the type, not the missing data", parseHaePayload({
+		data: { workouts: [{ id: "w1", name: "Marche", start: "2026-08-14 07:00:00 -0400", duration: 2700 }] },
+	}).skipped[0]?.reason, 'workout type "Marche" is not a run');
+	eq("a run with no route or distance keeps the old reason", parseHaePayload({
+		data: { workouts: [{ id: "r1", name: "Outdoor Run", start: "2026-08-14 07:00:00 -0400", duration: 2700 }] },
+	}).skipped[0]?.reason, "no route or running distance — not a run");
+
+	// The allowlist itself, exported so adding a locale is one edit.
+	eq("run fragments are lowercase and accent-free", RUN_NAME_FRAGMENTS.every((f) => f === f.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()), true);
+	eq("isRunName folds accents", isRunName("Extérieur Course") && isRunName("Exterieur Course"), true);
+	eq("isRunName rejects a hike either way", isRunName("Randonnée") || isRunName("Randonnee"), false);
+
+	// The real capture, end to end: French names, two workouts, nothing skipped.
+	const fixtureNames: string[] = payload.data.workouts.map((workout: { name: string }) => workout.name);
+	eq("the real payload's names are the French ones", [...new Set(fixtureNames)].join(","), "Extérieur Course");
+	eq("…all clear the type filter", fixtureNames.every((name) => isRunName(name)), true);
+	eq("…and none of the two is skipped", parsed.skipped.length, 0);
+}
+
+section("Per-user run-name allowlist (the Sync tab's 'allow this type')");
+{
+	// The merge itself: the built-in fragments, plus this user's own.
+	eq("a walk is not a run by default", isRunName("Marche"), false);
+	eq("…and is once its owner allows it", isRunName("Marche", ["marche"]), true);
+	eq("…without letting the next activity through", isRunName("Vélo", ["marche"]), false);
+	eq("an extra matches as a fragment too", isRunName("Marche rapide", ["marche"]), true);
+	eq("an extra is folded before it is matched", isRunName("Randonnée", ["Randonnée"]), true);
+	eq("…so accents fall on either side", isRunName("Randonnee", ["Randonnée"]) && isRunName("Randonnée", ["randonnee"]), true);
+	eq("the built-ins still stand on their own", isRunName("Outdoor Run", []), true);
+	eq("an empty fragment can't match everything", isRunName("Marche", [""]), false);
+	eq("a blank fragment can't either", isRunName("Marche", ["   "]), false);
+
+	// What actually gets stored on the user's row.
+	eq("names are folded, trimmed and lowercased", normalizeRunFragments(["  Marche  ", "RANDONNÉE"]).join(","), "marche,randonnee");
+	eq("inner whitespace is regularized", normalizeRunFragments(["Outdoor   Walk"])[0], "outdoor walk");
+	eq("the same name three ways collapses to one", normalizeRunFragments(["Marche", "marche", "MARCHÉ"]).length, 1);
+	eq("a one-character fragment is dropped", normalizeRunFragments(["a", "ab"]).join(","), "ab");
+	eq("an absurdly long one is dropped", normalizeRunFragments(["x".repeat(41)]).length, 0);
+	eq("…and the boundary itself is kept", normalizeRunFragments(["x".repeat(40)]).length, 1);
+	eq("non-strings are dropped", normalizeRunFragments([1, null, {}, "Marche"]).join(","), "marche");
+	eq("a non-array reads as empty", normalizeRunFragments("marche").length, 0);
+	eq("undefined reads as empty", normalizeRunFragments(undefined).length, 0);
+	eq(
+		"the list is capped",
+		normalizeRunFragments(Array.from({ length: 60 }, (_, index) => `type-${index}`)).length,
+		MAX_EXTRA_RUN_FRAGMENTS,
+	);
+	eq("folding is idempotent", foldRunName(foldRunName("Extérieur  Course")), foldRunName("Extérieur  Course"));
+
+	// End to end through the parser: one payload, two users.
+	const walk = {
+		data: {
+			workouts: [
+				{
+					id: "walk-1",
+					name: "Marche",
+					start: "2026-08-16 07:00:00 -0400",
+					end: "2026-08-16 07:30:00 -0400",
+					duration: 1800,
+					distance: { qty: 3.2, units: "km" },
+					walkingAndRunningDistance: [
+						{ date: "2026-08-16 07:00:01 -0400", qty: 1.6 },
+						{ date: "2026-08-16 07:15:00 -0400", qty: 1.6 },
+					],
+				},
+			],
+		},
+	};
+
+	eq("the walk is skipped for a user with no extras", parseHaePayload(walk).skipped.length, 1);
+	const allowed = parseHaePayload(walk, { extraRunFragments: ["marche"] });
+	eq("…and imported for the one who allowed it", allowed.workouts.length, 1);
+	eq("…as an ordinary workout", allowed.workouts[0]?.distanceM, 3200);
+	eq("…keeping its own name", allowed.workouts[0]?.name, "Marche");
+
+	// What the Sync tab lists a skip by: its name and the day it happened.
+	const skipped = parseHaePayload(walk).skipped[0];
+	eq("a skip records the workout's name", skipped?.name, "Marche");
+	eq("…and its local date", skipped?.localDate, "2026-08-16");
+
+	const unnamed = parseHaePayload({ data: { workouts: [{ id: "u1", start: "2026-08-16 07:00:00 -0400" }] } }).skipped[0];
+	eq("an unnamed workout records a null name", unnamed?.name, null);
+	eq("…but still records the date it happened", unnamed?.localDate, "2026-08-16");
+
+	const undated = parseHaePayload({ data: { workouts: [{ id: "u2", name: "Yoga" }] } }).skipped[0];
+	eq("an unreadable start records a null date", undated?.localDate, null);
+	eq("…and keeps the name that was skipped", undated?.name, "Yoga");
+
+	const anonymous = parseHaePayload({ data: { workouts: [{ name: "Marche" }] } }).skipped[0];
+	eq("a workout with no id is skipped as before", anonymous?.reason, "missing workout id");
+	eq("…and still carries its name", anonymous?.name, "Marche");
 }
 
 section("Workout filtering");

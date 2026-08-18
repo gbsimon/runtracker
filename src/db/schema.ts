@@ -234,6 +234,24 @@ export const aiUsage = pgTable(
 );
 
 /**
+ * A user's own settings, one row per user, everything in a single jsonb — so
+ * the next preference is a parser change rather than a migration.
+ *
+ * Deliberately not the plan's `settings` jsonb, where `hidePastWeeks` lives: a
+ * plan row only appears once the runner generates a plan, while the coach chat
+ * and the Settings page are there from their first sign-in. A preference saved
+ * before then would land nowhere — `setHidePastWeeks` updates a row that isn't
+ * there yet — and generating the plan would overwrite it afterwards.
+ */
+export const userPrefs = pgTable("user_prefs", {
+	userId: uuid("user_id")
+		.primaryKey()
+		.references(() => users.id, { onDelete: "cascade" }),
+	prefs: jsonb("prefs").notNull().default({}),
+	updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * Installation-wide settings that outlive a deploy — not a user's, and not the
  * environment's. One row per key, value in jsonb.
  *

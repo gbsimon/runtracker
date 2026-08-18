@@ -309,6 +309,26 @@ skipped/chatHistory → their tables).
       owner-only UI (Invites tab, sweep card) with his real account.)
 - [x] 23. Decommission plan for v1: legacy file kept read-only in repo
 
+### Post-launch requests (Simon, 2026-08-17 evening)
+- [x] 24. Ingest run-type filter: only running/trail-running imported;
+      localized-name allowlist (fr/en), skip-with-reason, HAE can't filter
+      at source (free tier). Agent in flight.
+- [x] 25. Confirmation on Log run delete (`delete-run-button.tsx`, confirm()
+      pattern matching danger-zone/token-revoke; names the run in the
+      prompt). Done in main loop, pending deploy with item 24.
+- [x] 26. Chat send-key setting: user-selectable — "Enter sends" (current)
+      vs "Enter = newline, Cmd/Ctrl+Enter sends" (v1 behavior). Persist
+      per user; toggle on Settings; applies in coach composer. Dispatch to
+      the coach agent AFTER item 24's agent frees the dev server.
+- [x] 27. (Simon, 2026-08-17) Skipped-activities review tab: new nav tab
+      ("Sync") with unseen-count notification badge; lists filtered-out
+      workouts from ingest_events summaries (date, localized type name,
+      reason, event); per-type "allow this type" action → appends fragment
+      to a PER-USER allowlist (parser merges it with RUN_NAME_FRAGMENTS)
+      and auto-reprocesses stored events so past skips import
+      retroactively; per-item import for unnamed workouts; visiting the
+      tab stamps skippedSeenAt to clear the badge. Dispatch after item 26.
+
 ## Running costs
 
 Railway ~$5–10/mo · Resend free tier · Open-Meteo free · Health Auto Export

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AppleHealthSync, type LastSyncView, type RecoveryItem, type TokenView } from "@/components/apple-health-sync";
+import { ChatSendKeySetting } from "@/components/chat-send-key-setting";
 import { DangerZone } from "@/components/danger-zone";
 import { ImportV1Form } from "@/components/import-v1-form";
 import { MaintenanceSweep, type SweepView } from "@/components/maintenance-sweep";
@@ -13,6 +14,7 @@ import { requireUser } from "@/lib/session";
 import { describeSweepRecord, readSweepStatus, type SweepRecord } from "@/lib/sweep";
 import { userTimeZone } from "@/lib/today";
 import { requestOrigin } from "@/lib/urls";
+import { getUserPrefs } from "@/lib/user-prefs";
 
 export const metadata: Metadata = { title: "Settings · RunTracker" };
 
@@ -77,7 +79,7 @@ export default async function SettingsPage() {
 	const user = await requireUser();
 	const isOwner = user.role === "owner";
 
-	const [counts, timeZone, origin, tokens, lastSync, pendingEvents, metrics, modelNotice, sweep] = await Promise.all([
+	const [counts, timeZone, origin, tokens, lastSync, pendingEvents, metrics, prefs, modelNotice, sweep] = await Promise.all([
 		dataCounts(user.id),
 		userTimeZone(),
 		requestOrigin(),
@@ -85,6 +87,7 @@ export default async function SettingsPage() {
 		lastIngestEvent(user.id),
 		pendingIngestEventCount(user.id, isOwner),
 		getDailyMetrics(user.id, { days: 30 }),
+		getUserPrefs(user.id),
 		// Only the owner can act on this, and only they pay for it.
 		isOwner ? coachModelNotice().catch(() => null) : null,
 		isOwner ? readSweepStatus().catch(() => null) : null,
@@ -157,6 +160,11 @@ export default async function SettingsPage() {
 					<MaintenanceSweep sweep={sweepView(sweep?.record ?? null, at)} />
 				</div>
 			) : null}
+
+			<div className="card space-y-4 p-5">
+				<h3 className="text-sm font-semibold text-white">Preferences</h3>
+				<ChatSendKeySetting value={prefs.chatSendKey} />
+			</div>
 
 			<div className="card p-5">
 				<ImportV1Form />

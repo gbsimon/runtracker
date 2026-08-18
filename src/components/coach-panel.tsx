@@ -1,5 +1,8 @@
+import { headers } from "next/headers";
 import { CHAT_VIEW_LIMIT, countChatMessages, listChatMessages } from "@/lib/chat";
+import { isAppleUserAgent } from "@/lib/chat-send-key";
 import { getPlan } from "@/lib/plan";
+import { getUserPrefs } from "@/lib/user-prefs";
 import { CoachChat } from "./coach-chat";
 
 /**
@@ -9,10 +12,12 @@ import { CoachChat } from "./coach-chat";
  * and Settings with its scroll position and any in-flight reply intact.
  */
 export async function CoachPanel({ userId }: { userId: string }) {
-	const [messages, total, plan] = await Promise.all([
+	const [messages, total, plan, prefs, headerList] = await Promise.all([
 		listChatMessages(userId, CHAT_VIEW_LIMIT),
 		countChatMessages(userId),
 		getPlan(userId),
+		getUserPrefs(userId),
+		headers(),
 	]);
 
 	return (
@@ -24,6 +29,10 @@ export async function CoachPanel({ userId }: { userId: string }) {
 			}))}
 			olderCount={Math.max(0, total - messages.length)}
 			plan={plan ? { weeks: plan.weeks, skipped: plan.skipped } : null}
+			sendKey={prefs.chatSendKey}
+			// Sniffed here rather than in the browser: the composer's hint would
+			// otherwise have to change wording after hydration.
+			apple={isAppleUserAgent(headerList.get("user-agent") ?? "")}
 		/>
 	);
 }

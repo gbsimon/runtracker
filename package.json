@@ -16,7 +16,8 @@
     "check:run-detail": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/register-ts-resolve.mjs scripts/check-run-detail.mts",
     "check:metrics": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/register-ts-resolve.mjs scripts/check-metrics.mts",
     "check:coach-context": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/register-ts-resolve.mjs scripts/check-coach-context.mts",
-    "check:sweep": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/register-ts-resolve.mjs scripts/check-sweep.mts"
+    "check:sweep": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/register-ts-resolve.mjs scripts/check-sweep.mts",
+    "check:prefs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/register-ts-resolve.mjs scripts/check-prefs.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

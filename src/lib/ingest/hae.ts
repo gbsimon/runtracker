@@ -4,9 +4,11 @@
  *
  * The payload's field *names* are the only stable contract. Names and units
  * strings come out localized (`"Extérieur Course"`, `"pas"` for steps) and are
- * sometimes plain wrong (`avgSpeed.units: "km"` on a km/h value), so nothing
- * here reads a `units` string or matches on `name`. See `tasks/hae-schema.md`
- * for the verified shape this follows.
+ * sometimes plain wrong (`avgSpeed.units: "km"` on a km/h value), so no *value*
+ * here is read out of a `units` string or a `name`. The single exception is the
+ * workout's type — see `RUN_NAME_FRAGMENTS`, which HAE only ever states in the
+ * phone's language. See `tasks/hae-schema.md` for the verified shape this
+ * follows.
  */
 
 import type { RunMetrics } from "../run-metrics";
@@ -16,6 +18,91 @@ import type { RunWeather } from "../weather";
 const HAE_DATE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?\s*(Z|[+-]\d{2}:?\d{2})?$/;
 
 const MS = 1000;
+
+/**
+ * The automation forwards every workout type it can see, and HealthKit's type
+ * reaches us only as the localized display `name` — `"Extérieur Course"` for a
+ * run, `"Marche"` for a walk, with no other field separating them. Detecting the
+ * type is therefore the one decision this parser takes from `name`, deliberately
+ * against the rule the rest of the file keeps. It is safe to do here and nowhere
+ * else: guessing wrong only ever skips a workout, the skip is reported with the
+ * offending name, and the raw payload is stored forever, so a missing locale is
+ * one entry below plus a Reprocess away from being fixed.
+ *
+ * Matching is on *fragments* of the accent-stripped, lowercased name rather than
+ * whole words, so compounded and inflected names ("Trail Running", "Jogging",
+ * "Course à pied") are covered by the stem. Adding a language is one line — and
+ * a user who doesn't want to wait for one adds their own fragment from the Sync
+ * tab, which merges into this list for their payloads only.
+ */
+export const RUN_NAME_FRAGMENTS = [
+	"run", // en — "Outdoor Run", "Indoor Run", "Trail Running"
+	"jog", // en — "Jogging"
+	"course", // fr — "Extérieur Course", "Course à pied"; also means "race", still a run
+	"trail", // en/fr — "Trail Running", "Course de trail"
+] as const;
+
+/**
+ * Bounds on a fragment a *user* adds from the Sync tab. One character would
+ * match half the alphabet's worth of workout names; forty is longer than any
+ * localized name HealthKit hands out.
+ */
+export const RUN_FRAGMENT_MIN = 2;
+export const RUN_FRAGMENT_MAX = 40;
+
+/** A person owns a handful of workout types, not hundreds — a cap on the stored list. */
+export const MAX_EXTRA_RUN_FRAGMENTS = 40;
+
+/**
+ * Lowercased with the accents peeled off and the spacing regularized, so
+ * `"Extérieur  Course"` reads as `"exterieur course"`. Both sides of every
+ * comparison go through it, which is what lets a fragment a user typed match a
+ * name a phone wrote.
+ */
+export function foldRunName(name: string): string {
+	return name
+		.normalize("NFD")
+		.replace(/\p{M}/gu, "")
+		.toLowerCase()
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/**
+ * A user's own additions to the allowlist, cleaned for storage: folded, length
+ * checked, deduped and capped. Anything that isn't a usable fragment is
+ * dropped rather than rejected — this normalizes rows written by an older
+ * build as readily as it does a fresh click.
+ */
+export function normalizeRunFragments(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return [];
+
+	const fragments: string[] = [];
+	for (const entry of raw) {
+		if (typeof entry !== "string") continue;
+		const fragment = foldRunName(entry);
+		if (fragment.length < RUN_FRAGMENT_MIN || fragment.length > RUN_FRAGMENT_MAX) continue;
+		if (!fragments.includes(fragment)) fragments.push(fragment);
+		if (fragments.length === MAX_EXTRA_RUN_FRAGMENTS) break;
+	}
+	return fragments;
+}
+
+/**
+ * Whether a workout's localized name says it is a run — the built-in fragments
+ * plus whatever this user has allowed from the Sync tab, which is how a locale
+ * or an activity the core list never anticipated gets imported without a
+ * deploy. The extras are folded here too, so passing raw names works.
+ */
+export function isRunName(name: string, extraFragments: readonly string[] = []): boolean {
+	const folded = foldRunName(name);
+	if (!folded) return false;
+	if (RUN_NAME_FRAGMENTS.some((fragment) => folded.includes(fragment))) return true;
+	return extraFragments.some((fragment) => {
+		const extra = foldRunName(fragment);
+		return extra.length > 0 && folded.includes(extra);
+	});
+}
 
 export type ParsedTimestamp = {
 	/** The instant, timezone-resolved. */
@@ -63,7 +150,9 @@ export type ParsedStreams = {
 
 export type ParsedWorkout = {
 	externalId: string;
-	name: string | null;
+	/** Localized and trimmed, e.g. `"Extérieur Course"` — never empty, since an
+	 * unnamed workout can't clear the run filter. */
+	name: string;
 	isIndoor: boolean;
 	startedAt: Date;
 	endedAt: Date | null;
@@ -88,9 +177,26 @@ export type ParsedWorkout = {
 	streams: ParsedStreams;
 };
 
-export type SkippedWorkout = { externalId: string | null; reason: string };
+/**
+ * `name` and `localDate` are what makes a skip reviewable weeks later on the
+ * Sync tab — "a Marche on 14 Aug", not "one workout, skipped". Both are
+ * best-effort: a payload can be missing either, and a skip is recorded anyway.
+ */
+export type SkippedWorkout = {
+	externalId: string | null;
+	reason: string;
+	/** The localized name HAE stated, trimmed — `null` when it sent none. */
+	name: string | null;
+	/** The day it happened, in the phone's own offset — `null` when the start was unreadable. */
+	localDate: string | null;
+};
 
 export type ParsedPayload = { workouts: ParsedWorkout[]; skipped: SkippedWorkout[] };
+
+export type ParseOptions = {
+	/** This user's own allowed workout-name fragments — see `isRunName`. */
+	extraRunFragments?: readonly string[];
+};
 
 type Row = Record<string, unknown>;
 
@@ -328,21 +434,35 @@ function appleWeather(workout: Row): RunWeather | null {
 	return { tempC, humidityPct, source: "apple" };
 }
 
-function parseWorkout(workout: Row): ParsedWorkout | SkippedWorkout {
-	const externalId = typeof workout.id === "string" && workout.id.trim() ? workout.id.trim() : null;
-	if (!externalId) return { externalId: null, reason: "missing workout id" };
-
+function parseWorkout(workout: Row, extraRunFragments: readonly string[]): ParsedWorkout | SkippedWorkout {
+	// Read before the gates rather than inside them: every skip carries what the
+	// workout was called and when it happened, so the Sync tab can list it.
+	const name = typeof workout.name === "string" ? workout.name.trim() : "";
 	const start = parseHaeTimestamp(workout.start);
-	if (!start) return { externalId, reason: "unreadable start time" };
+	const skip = (externalId: string | null, reason: string): SkippedWorkout => ({
+		externalId,
+		reason,
+		name: name || null,
+		localDate: start ? localParts(start.at, start.offsetMinutes).date : null,
+	});
+
+	const externalId = typeof workout.id === "string" && workout.id.trim() ? workout.id.trim() : null;
+	if (!externalId) return skip(null, "missing workout id");
+
+	// Type first, because the data gate below cannot do this job: a walk records
+	// a route and a walkingAndRunningDistance series exactly like a run does.
+	// No name means no way to tell, so it is skipped rather than guessed at.
+	if (!name) return skip(externalId, "unnamed workout — cannot verify it is a run");
+	if (!isRunName(name, extraRunFragments)) return skip(externalId, `workout type "${name}" is not a run`);
+
+	if (!start) return skip(externalId, "unreadable start time");
 	const end = parseHaeTimestamp(workout.end);
 
 	const routeRows = rows(workout.route);
 	const distanceRows = rows(workout.walkingAndRunningDistance);
-	// The automation forwards every workout type; a run is the one that came
-	// with a track or a running-distance series. Name and location are
-	// localized, so neither can carry this decision.
+	// Second gate: a run the watch recorded nothing for is still nothing to store.
 	if (routeRows.length === 0 && distanceRows.length === 0) {
-		return { externalId, reason: "no route or running distance — not a run" };
+		return skip(externalId, "no route or running distance — not a run");
 	}
 
 	const startSeconds = Math.round(start.at.getTime() / MS);
@@ -355,18 +475,18 @@ function parseWorkout(workout: Row): ParsedWorkout | SkippedWorkout {
 		distanceKm !== null
 			? (round(distanceKm * 1000, 2) as number)
 			: splits.reduce((total, split) => total + split.distanceM, 0);
-	if (!(distanceM > 0)) return { externalId, reason: "no distance recorded" };
+	if (!(distanceM > 0)) return skip(externalId, "no distance recorded");
 
 	const durationS =
 		num(workout.duration) ?? (end ? (end.at.getTime() - start.at.getTime()) / MS : null) ?? splits.at(-1)?.elapsedS ?? 0;
-	if (!(durationS > 0)) return { externalId, reason: "no duration recorded" };
+	if (!(durationS > 0)) return skip(externalId, "no duration recorded");
 
 	const heartRate = isRow(workout.heartRate) ? workout.heartRate : {};
 	const { date: localDate, time: localTime } = localParts(start.at, start.offsetMinutes);
 
 	return {
 		externalId,
-		name: typeof workout.name === "string" ? workout.name : null,
+		name,
 		isIndoor: workout.isIndoor === true,
 		startedAt: start.at,
 		endedAt: end?.at ?? null,
@@ -392,15 +512,16 @@ function parseWorkout(workout: Row): ParsedWorkout | SkippedWorkout {
 	};
 }
 
-export function parseHaePayload(raw: unknown): ParsedPayload {
+export function parseHaePayload(raw: unknown, options: ParseOptions = {}): ParsedPayload {
 	const envelope = isRow(raw) && isRow(raw.data) ? raw.data : null;
 	const list = envelope ? rows(envelope.workouts) : [];
+	const extraRunFragments = options.extraRunFragments ?? [];
 
 	const workouts: ParsedWorkout[] = [];
 	const skipped: SkippedWorkout[] = [];
 
 	for (const entry of list) {
-		const parsed = parseWorkout(entry);
+		const parsed = parseWorkout(entry, extraRunFragments);
 		if ("reason" in parsed) skipped.push(parsed);
 		else workouts.push(parsed);
 	}

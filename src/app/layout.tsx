@@ -7,6 +7,7 @@ import { CoachPanel } from "@/components/coach-panel";
 import { MainNav } from "@/components/main-nav";
 import { TimezoneSync } from "@/components/timezone-sync";
 import { UserMenu } from "@/components/user-menu";
+import { unseenSkippedCount } from "@/lib/ingest/skipped";
 import { resolveUser } from "@/lib/session";
 import { userTimeZone } from "@/lib/today";
 import { currentPathname } from "@/lib/urls";
@@ -32,6 +33,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 	// longer exists back into a signed-out request.
 	if (hasSession && !user && !isPublicPath(pathname)) redirect("/login");
 
+	// The Sync tab's badge. Suppressed while that page is the one being rendered:
+	// the visit clears it, but the page and this layout render side by side, so
+	// reading the count here would still show the stamp it is about to overwrite.
+	const syncBadge = user && pathname !== "/sync" ? await unseenSkippedCount(user.id) : 0;
+
 	return (
 		<html lang="en" className={inter.variable}>
 			<body className="min-h-screen font-sans text-gray-200 antialiased">
@@ -45,7 +51,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 						</div>
 						{user?.email ? <UserMenu email={user.email} /> : null}
 					</div>
-					{user ? <MainNav isOwner={user.role === "owner"} /> : null}
+					{user ? <MainNav isOwner={user.role === "owner"} syncBadge={syncBadge} /> : null}
 				</header>
 				<main className="relative z-10 mx-auto max-w-6xl px-5 py-5 pb-24">
 					{user ? (

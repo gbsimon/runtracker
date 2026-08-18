@@ -24,7 +24,7 @@ Scalars / objects — HAE quantity pattern is `{qty: number, units: string}`:
 | field | example / units | notes |
 |---|---|---|
 | `id` | UUID string | HealthKit workout UUID → our `external_id` (dedup key) |
-| `name` | `"Extérieur Course"` | **LOCALIZED** (French device). Never match on name for type — use `isIndoor` + presence of route; treat any workout arriving via this pipeline as a candidate run and filter conservatively |
+| `name` | `"Extérieur Course"` | **LOCALIZED** (French device). Never read a *value* out of it — but it is the only field that states the workout's TYPE, so the run filter matches on it. See decision 5 |
 | `start` / `end` | `"2026-08-15 14:19:19 -0400"` | NOT ISO-8601 — `YYYY-MM-DD HH:mm:ss ±HHMM`, needs explicit parse; offset gives local time of day + timezone |
 | `duration` | `6304.06` | plain number, **seconds** |
 | `distance` | `{qty, "km"}` | |
@@ -69,10 +69,60 @@ Scalars / objects — HAE quantity pattern is `{qty: number, units: string}`:
    {t, lat, lng, alt, v} — drop accuracy fields), kind `heart_rate` ←
    `heartRateData` ({t, bpm: Avg}), kind `cadence` ← derived per-minute from
    `stepCount`, kind `altitude` covered by route points (skip separate).
-5. Run filter: accept when `route` non-empty OR `walkingAndRunningDistance`
-   non-empty; skip obvious non-runs later if other workout types show up
-   (config sends all types).
+5. Run filter — **two gates, type first** (revised 2026-08-17, see below).
 6. Pace series: derive from `walkingAndRunningDistance` cumulative.
+
+## Decision 5 revised — the run-type filter (2026-08-17)
+
+The original rule (accept when `route` **or** `walkingAndRunningDistance` is
+non-empty) turned out to accept far more than runs: **a walk carries both.** So
+does a hike. The automation is configured to forward every workout type, so
+"has GPS and a walking-and-running distance series" describes a stroll around
+the block as exactly as it describes a tempo run — the gate could never have
+separated them. Rides, yoga and breathing exercises fell out only because they
+happen to carry neither array.
+
+HealthKit's activity type is **not in the payload**. The only field that states
+it is `name`, and `name` is localized: `"Extérieur Course"` on Simon's French
+phone, `"Outdoor Run"` on an English one. So the filter now matches on `name`,
+which **deliberately overrides the "never match on name" rule above — for TYPE
+DETECTION ONLY.** Every measured value still comes from a field name; no number,
+unit or date is ever read out of a localized string.
+
+**Gate 1 — type.** The name is lowercased and accent-stripped (`NFD`, combining
+marks removed, so `"Randonnée"` and `"Randonnee"` fold together) and accepted if
+it *contains* any fragment of the allowlist in `RUN_NAME_FRAGMENTS`
+(`src/lib/ingest/hae.ts`): `run`, `jog`, `course`, `trail`. Fragments rather than
+whole words, so the stem covers the inflections and compounds — `run` already
+matches `"Running"`, `"Trail Running"` and `"Outdoor Run"`, which is why
+`running` is not a separate entry. `course` is French for both *run* and *race*;
+both are runs. Verified accepted: `Extérieur Course`, `Course en extérieur`,
+`Course à pied`, `Course de trail`, `Outdoor Run`, `Indoor Run`, `Trail
+Running`, `Jogging`. Verified rejected: `Marche`, `Outdoor Walk`, `Vélo`,
+`Cycling`, `Randonnée`, `Hiking`, `Yoga`, `Natation`, `Swimming`, `Exercice de
+respiration`. A missing or empty name is skipped too (`unnamed workout — cannot
+verify it is a run`): with nothing to check, importing would be a guess.
+
+**Gate 2 — data.** Unchanged: a workout that clears the type gate but carries
+neither `route` nor `walkingAndRunningDistance` is still skipped with the
+original `no route or running distance — not a run`. Type runs first so a walk
+is reported as a walk rather than as missing data.
+
+**Why matching a localized string is safe here.** Three things, together:
+
+1. The allowlist is one exported, commented constant — adding a language (or a
+   name Apple renames) is a single line.
+2. Getting it wrong can only ever *skip*, never mis-import. The skip is recorded
+   with the offending name — `workout type "Marche" is not a run` — and surfaces
+   in the webhook's JSON response and in the stored `ingest_events.summary`, so
+   an unrecognised locale shows up as a named skip rather than as silence.
+3. The raw payload is stored forever and Reprocess replays it, so a workout
+   skipped by a too-narrow allowlist is imported the moment the list grows. No
+   data is lost by being conservative.
+
+Scope: **ingest-time only.** Runs already in the table are untouched, including
+any walk that was imported before this filter existed — a type filter cannot
+retroactively unmake a row, and deleting one is a separate, manual decision.
 
 ## Corrections found while building the parser (Phase 3, item 14)
 
