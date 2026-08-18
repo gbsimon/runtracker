@@ -1,0 +1,223 @@
+@import "tailwindcss";
+
+@theme {
+	--font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+	--color-brand-50: #eef7ff;
+	--color-brand-100: #d9edff;
+	--color-brand-200: #bce0ff;
+	--color-brand-300: #8ecdff;
+	--color-brand-400: #59b0ff;
+	--color-brand-500: #3390ff;
+	--color-brand-600: #1a6ff5;
+	--color-brand-700: #1459e1;
+	--color-brand-800: #1748b6;
+	--color-brand-900: #163e8f;
+
+	--color-dark-50: #f0f0f0;
+	--color-dark-100: #c0c0c0;
+	--color-dark-200: #8a8a9a;
+	--color-dark-300: #4a4a5a;
+	--color-dark-400: #2a2a3a;
+	--color-dark-500: #1a1a2e;
+	--color-dark-600: #141425;
+	--color-dark-700: #10101e;
+	--color-dark-800: #0c0c18;
+	--color-dark-900: #080812;
+
+	--radius-2xl: 1rem;
+	--radius-3xl: 1.25rem;
+}
+
+@layer base {
+	html {
+		color-scheme: dark;
+	}
+
+	body {
+		background: linear-gradient(145deg, #0a0a1a 0%, #0f1628 30%, #0d1117 60%, #080812 100%);
+		background-attachment: fixed;
+		isolation: isolate;
+	}
+
+	body::before {
+		content: "";
+		position: fixed;
+		inset: 0;
+		z-index: 0;
+		pointer-events: none;
+		background:
+			radial-gradient(ellipse at 20% 0%, rgb(26 111 245 / 0.12) 0%, transparent 50%),
+			radial-gradient(ellipse at 80% 100%, rgb(26 60 160 / 0.08) 0%, transparent 50%);
+	}
+
+	input[type="date"],
+	input[type="number"],
+	input[type="text"],
+	input[type="password"],
+	input[type="email"],
+	select,
+	textarea {
+		background: rgb(255 255 255 / 0.06);
+		border-color: rgb(255 255 255 / 0.1);
+		color: #e0e0f0;
+		transition: all 0.15s;
+	}
+
+	input::placeholder,
+	textarea::placeholder {
+		color: rgb(255 255 255 / 0.25);
+	}
+
+	input:focus,
+	select:focus,
+	textarea:focus {
+		border-color: #3390ff;
+		box-shadow:
+			0 0 0 3px rgb(51 144 255 / 0.15),
+			0 0 15px rgb(51 144 255 / 0.1);
+	}
+
+	input[type="range"],
+	input[type="checkbox"] {
+		accent-color: #3390ff;
+	}
+
+	option {
+		background: #1a1a2e;
+		color: #e0e0f0;
+	}
+
+	/* `list-none` hides the marker everywhere except Safari. */
+	summary::-webkit-details-marker {
+		display: none;
+	}
+
+	::selection {
+		background: rgb(51 144 255 / 0.3);
+	}
+
+	::-webkit-scrollbar {
+		width: 6px;
+	}
+
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	::-webkit-scrollbar-thumb {
+		background: rgb(255 255 255 / 0.1);
+		border-radius: 3px;
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background: rgb(255 255 255 / 0.2);
+	}
+}
+
+@utility glass {
+	background: rgb(12 12 24 / 0.8);
+	backdrop-filter: blur(24px);
+	-webkit-backdrop-filter: blur(24px);
+	border: 1px solid rgb(255 255 255 / 0.08);
+	border-radius: var(--radius-2xl);
+}
+
+@utility card {
+	background: rgb(12 12 24 / 0.75);
+	backdrop-filter: blur(20px);
+	-webkit-backdrop-filter: blur(20px);
+	border: 1px solid rgb(255 255 255 / 0.08);
+	border-radius: var(--radius-2xl);
+
+	&:hover {
+		border-color: rgb(255 255 255 / 0.12);
+	}
+}
+
+/* Declared after `card` so the accent wins on the current week's card. */
+@utility week-current {
+	border-left: 3px solid #3390ff;
+	background: linear-gradient(90deg, rgb(26 111 245 / 0.1), transparent);
+}
+
+@utility glow {
+	box-shadow:
+		0 0 20px rgb(51 144 255 / 0.15),
+		0 0 60px rgb(51 144 255 / 0.05);
+}
+
+@utility glow-sm {
+	box-shadow: 0 0 10px rgb(51 144 255 / 0.1);
+}
+
+@utility fade-in {
+	animation: fade-in 0.25s ease-out;
+}
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+/*
+ * Leaflet wearing the app's theme (run detail view). The library ships light
+ * styling and OSM's raster tiles are daylight-bright, so the tile pane is
+ * dimmed to sit inside the dark glass rather than glare out of it — the filter
+ * is on the tile pane alone, leaving the route in the overlay pane above at
+ * full colour. `isolation` keeps Leaflet's own z-indexes from reaching the
+ * sticky header.
+ *
+ * Every override is written `.run-map.leaflet-container …` because Leaflet's
+ * own rules are `.leaflet-container …` and its stylesheet is imported from the
+ * map component, which lands after this file: matching its specificity would
+ * lose the tie on source order.
+ */
+.run-map {
+	background: #0c0c18;
+	isolation: isolate;
+}
+
+.run-map .leaflet-tile-pane {
+	filter: brightness(0.5) saturate(0.6) contrast(1.1);
+}
+
+.run-map.leaflet-container .leaflet-control-attribution {
+	background: rgb(12 12 24 / 0.8);
+	color: rgb(255 255 255 / 0.45);
+	font-size: 10px;
+	padding: 1px 6px;
+}
+
+.run-map.leaflet-container .leaflet-control-attribution a {
+	color: rgb(255 255 255 / 0.6);
+}
+
+.run-map.leaflet-container .leaflet-control-zoom a {
+	background: rgb(12 12 24 / 0.85);
+	border-color: rgb(255 255 255 / 0.1);
+	color: #c0c0c0;
+}
+
+.run-map.leaflet-container .leaflet-control-zoom a:hover {
+	background: rgb(26 26 46 / 0.95);
+	color: #fff;
+}
+
+.run-map.leaflet-container .leaflet-tooltip {
+	background: rgb(12 12 24 / 0.92);
+	border: 1px solid rgb(255 255 255 / 0.12);
+	color: #e0e0f0;
+	box-shadow: none;
+	font-size: 11px;
+}
+
+.run-map.leaflet-container .leaflet-tooltip-top::before {
+	border-top-color: rgb(255 255 255 / 0.12);
+}
