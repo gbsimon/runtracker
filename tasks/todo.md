@@ -329,6 +329,27 @@ skipped/chatHistory → their tables).
       retroactively; per-item import for unnamed workouts; visiting the
       tab stamps skippedSeenAt to clear the badge. Dispatch after item 26.
 
+- [x] 28. (Simon, 2026-08-26: "I'd like the automation to be on a click in
+      the front end to sync. More reliable.") "Sync now" button: HAE's own
+      docs say background automations skip when the phone is locked, in Low
+      Power Mode, or under memory pressure. The button opens a
+      `shortcuts://x-callback-url/run-shortcut` deep link to a user-built
+      Shortcut whose steps are HAE's "Run Automation" action (Workouts +
+      Health Metrics), so the export runs foregrounded; x-success/x-error/
+      x-cancel return to `/sync?synced=…&since=<tap instant>`. The Sync tab
+      polls `pollSyncAction` (newest processed ingest_event newer than the
+      tap, capped to a 15-min window; a row still `received` counts as in
+      flight) every 2.5s for 90s + on visibilitychange, keeps watching 12s
+      after the first arrival so the second payload is reported too, and
+      revalidates the layout once per new event. From a home-screen web app
+      the link is plain `shortcuts://run-shortcut` (no x-callback — iOS would
+      open the callback in Safari) and the in-page poll does the work. Shortcut name is a per-user pref
+      (`syncShortcutName`, default "RunTracker Sync") edited on Settings,
+      with build-the-shortcut steps. Additive only: automations untouched,
+      no schema change (jsonb pref), old rows read the default.
+      `src/lib/sync-now.ts`, `src/components/sync-now.tsx`; checks folded
+      into `pnpm check:prefs`.
+
 ## Running costs
 
 Railway ~$5–10/mo · Resend free tier · Open-Meteo free · Health Auto Export

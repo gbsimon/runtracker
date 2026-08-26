@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { AppleHealthSync, type LastSyncView, type RecoveryItem, type TokenView } from "@/components/apple-health-sync";
 import { ChatSendKeySetting } from "@/components/chat-send-key-setting";
 import { DangerZone } from "@/components/danger-zone";
@@ -12,6 +13,7 @@ import { listIngestTokens } from "@/lib/ingest/tokens";
 import { formatMonthDay } from "@/lib/running";
 import { requireUser } from "@/lib/session";
 import { describeSweepRecord, readSweepStatus, type SweepRecord } from "@/lib/sweep";
+import { isIosUserAgent } from "@/lib/sync-now";
 import { userTimeZone } from "@/lib/today";
 import { requestOrigin } from "@/lib/urls";
 import { getUserPrefs } from "@/lib/user-prefs";
@@ -79,19 +81,21 @@ export default async function SettingsPage() {
 	const user = await requireUser();
 	const isOwner = user.role === "owner";
 
-	const [counts, timeZone, origin, tokens, lastSync, pendingEvents, metrics, prefs, modelNotice, sweep] = await Promise.all([
-		dataCounts(user.id),
-		userTimeZone(),
-		requestOrigin(),
-		listIngestTokens(user.id),
-		lastIngestEvent(user.id),
-		pendingIngestEventCount(user.id, isOwner),
-		getDailyMetrics(user.id, { days: 30 }),
-		getUserPrefs(user.id),
-		// Only the owner can act on this, and only they pay for it.
-		isOwner ? coachModelNotice().catch(() => null) : null,
-		isOwner ? readSweepStatus().catch(() => null) : null,
-	]);
+	const [counts, timeZone, origin, tokens, lastSync, pendingEvents, metrics, prefs, modelNotice, sweep, headerList] =
+		await Promise.all([
+			dataCounts(user.id),
+			userTimeZone(),
+			requestOrigin(),
+			listIngestTokens(user.id),
+			lastIngestEvent(user.id),
+			pendingIngestEventCount(user.id, isOwner),
+			getDailyMetrics(user.id, { days: 30 }),
+			getUserPrefs(user.id),
+			// Only the owner can act on this, and only they pay for it.
+			isOwner ? coachModelNotice().catch(() => null) : null,
+			isOwner ? readSweepStatus().catch(() => null) : null,
+			headers(),
+		]);
 
 	const at = stamp(timeZone);
 	const tokenViews: TokenView[] = tokens.map((token) => ({
@@ -147,11 +151,14 @@ export default async function SettingsPage() {
 			<div className="card p-5">
 				<AppleHealthSync
 					endpoint={`${origin}/api/ingest/health-auto-export`}
+					origin={origin}
 					tokens={tokenViews}
 					lastSync={lastSyncView}
 					recovery={recoveryItems(metrics)}
 					isOwner={isOwner}
 					pendingEvents={pendingEvents}
+					shortcutName={prefs.syncShortcutName}
+					ios={isIosUserAgent(headerList.get("user-agent") ?? "")}
 				/>
 			</div>
 

@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { userPrefs } from "@/db/schema";
 import { type ChatSendKey, normalizeChatSendKey } from "./chat-send-key";
 import { normalizeRunFragments } from "./ingest/hae";
+import { normalizeSyncShortcutName } from "./sync-now";
 
 /**
  * The `user_prefs` table, read and written as typed values. Like the plan
@@ -22,6 +23,12 @@ export type UserPrefs = {
 	 * first visit should show.
 	 */
 	skippedSeenAt: string | null;
+	/**
+	 * The iOS Shortcut the "Sync now" button runs. Stored per user because the
+	 * name is whatever they typed when they saved the shortcut, and a mismatch
+	 * is the one way that button can fail silently.
+	 */
+	syncShortcutName: string;
 };
 
 /** Anything unparseable reads as "never", so a bad value can only over-notify. */
@@ -37,6 +44,7 @@ function normalizeUserPrefs(raw: unknown): UserPrefs {
 		chatSendKey: normalizeChatSendKey(source.chatSendKey),
 		extraRunFragments: normalizeRunFragments(source.extraRunFragments),
 		skippedSeenAt: normalizeSeenAt(source.skippedSeenAt),
+		syncShortcutName: normalizeSyncShortcutName(source.syncShortcutName),
 	};
 }
 
@@ -68,6 +76,13 @@ async function mergeUserPrefs(userId: string, patch: Partial<UserPrefs>): Promis
 				updatedAt: new Date(),
 			},
 		});
+}
+
+/** Empty, or anything unusable, resets to the name the instructions give. */
+export async function setSyncShortcutName(userId: string, name: string): Promise<string> {
+	const normalized = normalizeSyncShortcutName(name);
+	await mergeUserPrefs(userId, { syncShortcutName: normalized });
+	return normalized;
 }
 
 export async function setChatSendKey(userId: string, mode: ChatSendKey): Promise<void> {

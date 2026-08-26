@@ -1,6 +1,6 @@
 /**
- * Unit checks for the per-user preferences: the composer's send-key decision
- * and the row it is stored in.
+ * Unit checks for the per-user preferences: the composer's send-key decision,
+ * the "Sync now" deep link and its round trip, and the row they are stored in.
  *
  *   pnpm check:prefs
  *
@@ -26,8 +26,19 @@ import {
 	type SendKeyChord,
 	sendKeyHint,
 } from "../src/lib/chat-send-key.ts";
+import type { IngestSummary } from "../src/lib/ingest/process.ts";
 import { countUnseenSkipped, groupSkippedWorkouts, type SkippedItem } from "../src/lib/ingest/skipped.ts";
-import { allowRunName, getUserPrefs, setChatSendKey, setSkippedSeenAt } from "../src/lib/user-prefs.ts";
+import {
+	buildSyncShortcutUrl,
+	clampSince,
+	DEFAULT_SYNC_SHORTCUT_NAME,
+	describeSyncOutcome,
+	isIosUserAgent,
+	normalizeSyncShortcutName,
+	parseSyncReturn,
+	SYNC_WINDOW_MS,
+} from "../src/lib/sync-now.ts";
+import { allowRunName, getUserPrefs, setChatSendKey, setSkippedSeenAt, setSyncShortcutName } from "../src/lib/user-prefs.ts";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 
@@ -223,6 +234,93 @@ section("Skipped activities collapse into one row per type");
 }
 
 // ---------------------------------------------------------------------------
+// "Sync now": the deep link out, and the callback back in
+// ---------------------------------------------------------------------------
+
+section("The shortcut name survives a text input");
+
+eq_("the default is what the instructions say to type", normalizeSyncShortcutName(undefined), DEFAULT_SYNC_SHORTCUT_NAME);
+eq_("an empty field falls back to it", normalizeSyncShortcutName("   "), DEFAULT_SYNC_SHORTCUT_NAME);
+eq_("the wrong type falls back to it", normalizeSyncShortcutName(7), DEFAULT_SYNC_SHORTCUT_NAME);
+eq_("a pasted double space is collapsed, not rejected", normalizeSyncShortcutName("  Run  Export\t"), "Run Export");
+eq_("an over-long name is cut, without a trailing space", normalizeSyncShortcutName(`${"a".repeat(59)} b`).length, 59);
+eq_("a normal name is left alone", normalizeSyncShortcutName("Sync RunTracker"), "Sync RunTracker");
+
+section("The deep link Shortcuts opens");
+
+const tapped = new Date("2026-08-26T14:05:00.000Z");
+const link = buildSyncShortcutUrl({ name: "RunTracker Sync", origin: "https://runtracker.up.railway.app/", at: tapped });
+check("it is a run-shortcut x-callback-url", link.startsWith("shortcuts://x-callback-url/run-shortcut?"), link);
+check("the name is percent-encoded, never form-encoded", link.includes("name=RunTracker%20Sync") && !link.includes("+"), link);
+
+const params = new URLSearchParams(link.slice(link.indexOf("?") + 1));
+for (const [key, outcome] of [
+	["x-success", "done"],
+	["x-error", "error"],
+	["x-cancel", "cancel"],
+] as const) {
+	const back = new URL(params.get(key) ?? "");
+	eq_(`${key} comes back to the Sync tab`, `${back.origin}${back.pathname}`, "https://runtracker.up.railway.app/sync");
+	eq_(`…marked "${outcome}"`, back.searchParams.get("synced"), outcome);
+	eq_("…carrying the moment of the tap", back.searchParams.get("since"), tapped.toISOString());
+}
+check("a trailing slash on the origin doesn't double up", !link.includes("app%2F%2Fsync"), link);
+
+const plain = buildSyncShortcutUrl({ name: "RunTracker Sync", origin: "https://runtracker.up.railway.app", at: tapped, callbacks: false });
+eq_("from the home screen, the shortcut runs without a callback", plain, "shortcuts://run-shortcut?name=RunTracker%20Sync");
+
+section("The query string that comes back is parsed, not trusted");
+
+eq_("done is a known outcome", parseSyncReturn("done"), "done");
+eq_("cancel is a known outcome", parseSyncReturn("cancel"), "cancel");
+eq_("anything else is nothing", parseSyncReturn("success"), null);
+eq_("an absent key is nothing", parseSyncReturn(undefined), null);
+
+const now = new Date("2026-08-26T14:10:00.000Z");
+eq_("a tap five minutes ago is still live", clampSince("2026-08-26T14:05:00.000Z", now)?.toISOString(), "2026-08-26T14:05:00.000Z");
+eq_("a tap on the window's edge is still live", clampSince(new Date(now.getTime() - SYNC_WINDOW_MS).toISOString(), now)?.getTime(), now.getTime() - SYNC_WINDOW_MS);
+eq_("a tap from an hour ago has expired", clampSince("2026-08-26T13:10:00.000Z", now), null);
+eq_("a fast phone clock is pulled back to now", clampSince("2026-08-26T14:11:00.000Z", now)?.getTime(), now.getTime());
+eq_("garbage is nothing", clampSince("just now", now), null);
+eq_("the wrong type is nothing", clampSince(["2026-08-26T14:05:00.000Z"], now), null);
+
+section("What arrived, in one line");
+
+const summary = (patch: Partial<IngestSummary>): IngestSummary => ({
+	workouts: 0,
+	imported: 0,
+	reconciled: 0,
+	enriched: 0,
+	duplicate: 0,
+	skipped: 0,
+	failed: 0,
+	outcomes: [],
+	...patch,
+});
+check("no summary at all is said plainly", describeSyncOutcome(null).includes("nothing this build could read"));
+check("a broken pass points at reprocessing", describeSyncOutcome(summary({ error: "boom" })).includes("reprocessed"));
+eq_("an empty export is not a failure", describeSyncOutcome(summary({})), "Nothing new — your phone had no workouts waiting.");
+eq_("a run that imported is the headline", describeSyncOutcome(summary({ workouts: 1, imported: 1 })), "1 run imported");
+eq_(
+	"the parts read like the Settings card",
+	describeSyncOutcome(summary({ workouts: 3, imported: 1, reconciled: 1, duplicate: 1 })),
+	"1 run imported · 1 matched to a run you logged · 1 already had",
+);
+eq_(
+	"a metrics-only payload says so instead of '0 workouts'",
+	describeSyncOutcome(summary({ metrics: { entries: 4, days: { resting_heart_rate: 2, sleep_analysis: 2 } } })),
+	"4 health-metric readings — sleep and recovery are up to date.",
+);
+
+section("Where the button makes sense");
+
+check("an iPhone", isIosUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15"));
+check("an iPad", isIosUserAgent("Mozilla/5.0 (iPad; CPU OS 19_0 like Mac OS X)"));
+check("not a Mac, even though it has Shortcuts", !isIosUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0)"));
+check("not Android", !isIosUserAgent("Mozilla/5.0 (Linux; Android 16; Pixel 10)"));
+check("not an empty agent", !isIosUserAgent(""));
+
+// ---------------------------------------------------------------------------
 // The row it lives in — against the real database
 // ---------------------------------------------------------------------------
 
@@ -292,6 +390,12 @@ try {
 	eq_("the seen stamp round-trips as an instant", (await getUserPrefs(userId)).skippedSeenAt, seen.toISOString());
 	eq_("…without disturbing the allowlist", (await getUserPrefs(userId)).extraRunFragments.length, 2);
 
+	eq_("a user who never named a shortcut gets the default", (await getUserPrefs(userId)).syncShortcutName, DEFAULT_SYNC_SHORTCUT_NAME);
+	eq_("saving a name returns it normalized", await setSyncShortcutName(userId, "  My  Sync "), "My Sync");
+	eq_("…and it reads back", (await getUserPrefs(userId)).syncShortcutName, "My Sync");
+	eq_("clearing the field goes back to the default", await setSyncShortcutName(userId, ""), DEFAULT_SYNC_SHORTCUT_NAME);
+	eq_("…without disturbing the seen stamp", (await getUserPrefs(userId)).skippedSeenAt, seen.toISOString());
+
 	// A row written by hand, by an older build, or by a future one.
 	await db
 		.update(userPrefs)
@@ -300,6 +404,7 @@ try {
 	const salvaged = await getUserPrefs(userId);
 	eq_("a messy allowlist is normalized on the way out", salvaged.extraRunFragments.join(","), "marche");
 	eq_("an unparseable stamp reads as never looked", salvaged.skippedSeenAt, null);
+	eq_("a row from before the button existed reads the default name", salvaged.syncShortcutName, DEFAULT_SYNC_SHORTCUT_NAME);
 
 	await db.update(userPrefs).set({ prefs: { extraRunFragments: "marche" } }).where(eq(userPrefs.userId, userId));
 	eq_("an allowlist of the wrong type reads as empty", (await getUserPrefs(userId)).extraRunFragments.length, 0);

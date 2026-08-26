@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { type IngestSummary, reprocessIngestEvents } from "@/lib/ingest/process";
 import { createIngestToken, revokeIngestToken } from "@/lib/ingest/tokens";
 import { requireUser } from "@/lib/session";
+import { setSyncShortcutName } from "@/lib/user-prefs";
 
 /** The plaintext token rides back exactly once — after this it only exists hashed. */
 export type TokenState = { status: "idle" | "created" | "error"; token?: string; label?: string; message?: string };
@@ -52,4 +53,23 @@ export async function reprocessIngestAction(): Promise<ReprocessState> {
 				? "Nothing waiting — every stored sync has already been processed."
 				: `Reprocessed ${result.events} stored sync${result.events === 1 ? "" : "s"}.`,
 	};
+}
+
+export type ShortcutNameState = { status: "idle" | "saved" | "error"; name?: string; message?: string };
+
+/**
+ * The name of the iOS Shortcut the "Sync now" button runs. Saved rather than
+ * hard-coded because Shortcuts matches on the name, and someone who called
+ * theirs something else would otherwise get a button that opens Shortcuts and
+ * silently does nothing.
+ */
+export async function setSyncShortcutNameAction(
+	_previous: ShortcutNameState,
+	formData: FormData,
+): Promise<ShortcutNameState> {
+	const user = await requireUser();
+	const name = await setSyncShortcutName(user.id, String(formData.get("name") ?? ""));
+	revalidatePath("/settings");
+	revalidatePath("/sync");
+	return { status: "saved", name };
 }

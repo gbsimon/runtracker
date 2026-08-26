@@ -6,9 +6,13 @@ import {
 	reprocessIngestAction,
 	type ReprocessState,
 	revokeIngestTokenAction,
+	setSyncShortcutNameAction,
+	type ShortcutNameState,
 	type TokenState,
 } from "@/app/settings/sync-actions";
+import { DEFAULT_SYNC_SHORTCUT_NAME } from "@/lib/sync-now";
 import { SubmitButton } from "./submit-button";
+import { SyncNow } from "./sync-now";
 
 export type TokenView = {
 	id: string;
@@ -124,20 +128,31 @@ function Recovery({ items }: { items: RecoveryItem[] }) {
 
 export function AppleHealthSync({
 	endpoint,
+	origin,
 	tokens,
 	lastSync,
 	recovery,
 	isOwner,
 	pendingEvents,
+	shortcutName,
+	ios,
 }: {
 	endpoint: string;
+	origin: string;
 	tokens: TokenView[];
 	lastSync: LastSyncView | null;
 	recovery: RecoveryItem[];
 	isOwner: boolean;
 	pendingEvents: number;
+	shortcutName: string;
+	ios: boolean;
 }) {
 	const [tokenState, createToken] = useActionState<TokenState, FormData>(createIngestTokenAction, { status: "idle" });
+	const [shortcutState, saveShortcutName] = useActionState<ShortcutNameState, FormData>(setSyncShortcutNameAction, {
+		status: "idle",
+	});
+	// The saved name wins over the prop until the page re-renders with it.
+	const currentShortcutName = shortcutState.status === "saved" && shortcutState.name ? shortcutState.name : shortcutName;
 	const [reprocess, setReprocess] = useState<ReprocessState>({ status: "idle" });
 	const [reprocessing, startReprocess] = useTransition();
 
@@ -292,6 +307,84 @@ export function AppleHealthSync({
 					</Step>
 				</ol>
 			</details>
+
+			<div className="space-y-3 border-t border-white/5 pt-4">
+				<div>
+					<p className="text-sm font-medium text-gray-200">Sync from a tap</p>
+					<p className="mt-1 text-xs leading-relaxed text-gray-400">
+						The automations above only run when iOS lets them — a locked phone, Low Power Mode or a busy morning can each
+						skip one. The Sync tab has a button that runs the same export on demand, through a Shortcut you build once.
+						The automations keep running on the days they do get a turn; the button is for the days they don&rsquo;t.
+					</p>
+				</div>
+
+				<SyncNow
+					origin={origin}
+					shortcutName={currentShortcutName}
+					ios={ios}
+					initial={null}
+					initialSince={null}
+					initialError={null}
+				/>
+
+				<form action={saveShortcutName} className="flex flex-col gap-2 sm:flex-row">
+					<input
+						name="name"
+						type="text"
+						key={currentShortcutName}
+						defaultValue={currentShortcutName}
+						placeholder={DEFAULT_SYNC_SHORTCUT_NAME}
+						aria-label="Shortcut name"
+						autoCapitalize="words"
+						autoCorrect="off"
+						className="flex-1 rounded-xl border px-3 py-2.5 text-sm outline-none"
+					/>
+					<SubmitButton
+						pendingLabel="Saving…"
+						className="rounded-xl border border-white/10 px-4 py-2.5 text-sm text-gray-300 transition hover:border-white/20 hover:text-white"
+					>
+						Save shortcut name
+					</SubmitButton>
+				</form>
+				{shortcutState.status === "saved" ? (
+					<p className="fade-in text-xs text-emerald-400">The button now runs &ldquo;{shortcutState.name}&rdquo;.</p>
+				) : (
+					<p className="text-xs text-gray-500">
+						Must match the shortcut&rsquo;s name on your phone exactly — that is how iOS finds it.
+					</p>
+				)}
+
+				<details className="group rounded-xl border border-white/10">
+					<summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm text-gray-300 transition hover:text-white">
+						<span className="text-xs text-gray-600 group-open:hidden">▸</span>
+						<span className="hidden text-xs text-gray-600 group-open:inline">▾</span>
+						Build the shortcut (once, about a minute)
+					</summary>
+
+					<ol className="space-y-3.5 border-t border-white/5 px-4 py-4">
+						<Step n={1} title="Open Shortcuts and add a new shortcut">
+							The Shortcuts app is already on your iPhone. Tap <span className="text-gray-300">+</span> in the top corner.
+						</Step>
+						<Step n={2} title="Add Health Auto Export’s “Run Automation” action">
+							Search the actions for <span className="text-gray-300">Run Automation</span> and pick the one from Health
+							Auto Export. Tap its selection field and choose your <span className="text-gray-300">Workouts</span>{" "}
+							automation.
+						</Step>
+						<Step n={3} title="Add it again for the recovery data">
+							A second <span className="text-gray-300">Run Automation</span> action underneath, pointed at the{" "}
+							<span className="text-gray-300">Health Metrics</span> automation. One tap then sends both.
+						</Step>
+						<Step n={4} title="Name it">
+							Tap the title at the top and call it{" "}
+							<code className="text-[11px] text-gray-300">{currentShortcutName}</code> — the name saved above. Tap Done.
+						</Step>
+						<Step n={5} title="Try it">
+							Go to the Sync tab and press <span className="text-gray-300">Sync now</span>. iOS asks once whether
+							RunTracker may open Shortcuts; allow it. The card fills in as soon as the export lands.
+						</Step>
+					</ol>
+				</details>
+			</div>
 
 			{isOwner ? (
 				<div className="space-y-2 border-t border-white/5 pt-4">
