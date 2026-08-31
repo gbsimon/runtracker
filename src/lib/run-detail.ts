@@ -302,6 +302,9 @@ export function parseSplits(raw: unknown): Split[] {
 		const distanceM = finiteOrNull(entry.distanceM);
 		const paceSPerKm = finiteOrNull(entry.paceSPerKm);
 		if (km === null || splitS === null || distanceM === null || paceSPerKm === null) continue;
+		// A row written before splits knew about auto-pauses simply has no
+		// `pausedS`, and keeps none — `splitS` was wall-clock and stays it.
+		const pausedS = finiteOrNull(entry.pausedS);
 		splits.push({
 			km,
 			t: finiteOrNull(entry.t) ?? 0,
@@ -309,6 +312,7 @@ export function parseSplits(raw: unknown): Split[] {
 			splitS,
 			distanceM,
 			paceSPerKm,
+			...(pausedS !== null && pausedS > 0 ? { pausedS } : {}),
 			...(entry.partial === true ? { partial: true as const } : {}),
 		});
 	}
@@ -540,7 +544,9 @@ export function enrichSplits(splits: Split[], route: RoutePoint[], heartRate: He
 	);
 
 	return splits.map((split) => {
-		const from = split.t - split.splitS;
+		// `splitS` is moving time, so the paused seconds have to be added back to
+		// land on the wall-clock instant this kilometre started at.
+		const from = split.t - split.splitS - (split.pausedS ?? 0);
 		const to = split.t;
 
 		let sum = 0;

@@ -206,7 +206,8 @@ function cumulativeFromSplits(splits: Split[]): DistancePoint[] {
 	const ordered = [...splits].sort((a, b) => a.t - b.t);
 	if (ordered.length < 2) return [];
 
-	const start = ordered[0].t - ordered[0].splitS;
+	// Back to the wall-clock start: `splitS` excludes any auto-paused seconds.
+	const start = ordered[0].t - ordered[0].splitS - (ordered[0].pausedS ?? 0);
 	const points: DistancePoint[] = [{ t: start, m: 0 }];
 	let cumulative = 0;
 	for (const split of ordered) {

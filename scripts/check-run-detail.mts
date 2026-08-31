@@ -325,6 +325,16 @@ section("Stream parsing (jsonb is untrusted)");
 	eq("splits come back in order", splits[0].km, 1);
 	eq("partial is only set when it is true", splits[0].partial, undefined);
 	eq("partial survives", parseSplits([{ km: 1, splitS: 1, distanceM: 1, paceSPerKm: 1, partial: true }])[0].partial, true);
+
+	// `pausedS` arrived after the first runs were stored, so a row without it has
+	// to come back exactly as it went in — and one with it has to keep it.
+	const legacy = { km: 1, t: 500, elapsedS: 500, splitS: 500, distanceM: 1000, paceSPerKm: 500 };
+	eq("a row written before pausedS round-trips byte-identical", JSON.stringify(parseSplits([legacy])[0]), JSON.stringify(legacy));
+	const paused = { ...legacy, splitS: 471, paceSPerKm: 471, pausedS: 29 };
+	eq("pausedS survives the reader", parseSplits([paused])[0].pausedS, 29);
+	eq("a zero is dropped rather than stored", "pausedS" in parseSplits([{ ...paused, pausedS: 0 }])[0], false);
+	eq("so is a non-number", "pausedS" in parseSplits([{ ...paused, pausedS: "lots" }])[0], false);
+	eq("…and the split still parses without it", parseSplits([{ ...paused, pausedS: "lots" }])[0].splitS, 471);
 }
 
 section("Split stats and enrichment");

@@ -52,7 +52,10 @@ export type WorkoutOutcome = {
 	/** The plan key this run checked off, when it matched one. */
 	planKey?: string;
 	weatherSource?: string;
-	/** Stream kinds and metric fields an enrichment pass added to an existing run. */
+	/**
+	 * Stream kinds and metric fields an enrichment pass wrote to an existing run
+	 * — added, or in `splits`' case rederived from the raw payload.
+	 */
 	added?: string[];
 };
 
@@ -135,29 +138,70 @@ async function writeStreams(tx: DbExecutor, runId: string, workout: ParsedWorkou
 }
 
 /**
+ * Value equality for two jsonb-shaped values, key order and all. `jsonb`
+ * rewrites object keys into its own order on the way in, so a stored stream
+ * never stringifies like the one the parser just built — sorting both sides is
+ * what makes "did this actually change?" answerable.
+ */
+function canonicalJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (typeof value === "object" && value !== null) {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.filter(([, item]) => item !== undefined)
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+		return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
+}
+
+/**
  * A workout we already have, replayed after the parser learned something new.
  *
- * Only additions: a stream kind the run is missing is inserted, a metrics field
- * it is missing is filled, and nothing already stored is touched — not the
- * existing series, not the weather, and above all not the effort and notes the
- * runner typed. That makes this safe to run over every stored payload, which is
- * exactly what the Reprocess button now does.
+ * Almost entirely additions: a stream kind the run is missing is inserted, a
+ * metrics field it is missing is filled, and nothing else already stored is
+ * touched — not the weather, and above all not the effort and notes the runner
+ * typed.
+ *
+ * The one exception is `splits`, which is *derived*, not measured: when the
+ * derivation itself improves — pause-aware times being the case that forced
+ * this — the stored series is stale in a way no missing-kind check can see, and
+ * the raw payload is the only place the truth lives. So a splits stream that
+ * now parses differently is rewritten in place, byte-equal ones are left alone,
+ * and every other kind keeps the old add-only rule.
  */
 async function enrichExistingRun(userId: string, run: RunRecord, workout: ParsedWorkout): Promise<string[]> {
 	const stored = await getDb()
-		.select({ kind: runStreams.kind })
+		.select({ kind: runStreams.kind, data: runStreams.data })
 		.from(runStreams)
 		.where(eq(runStreams.runId, run.id));
 
+	const rows = workoutStreamRows(workout);
 	const present = new Set(stored.map((row) => row.kind));
-	const missing = workoutStreamRows(workout).filter((row) => !present.has(row.kind));
+	const missing = rows.filter((row) => !present.has(row.kind));
 	const { metrics, added: metricFields } = mergeRunMetrics(run.metrics, workout.metrics);
 
-	if (missing.length === 0 && metricFields.length === 0) return [];
+	// A missing splits stream is already covered by `missing`; this is only the
+	// one that exists and has since gone out of date.
+	const freshSplits = rows.find((row) => row.kind === "splits");
+	const storedSplits = stored.find((row) => row.kind === "splits");
+	const staleSplits =
+		freshSplits && storedSplits && canonicalJson(storedSplits.data) !== canonicalJson(freshSplits.data)
+			? freshSplits
+			: null;
+
+	if (missing.length === 0 && metricFields.length === 0 && !staleSplits) return [];
 
 	await getDb().transaction(async (tx) => {
 		if (missing.length > 0) {
 			await tx.insert(runStreams).values(missing.map((row) => ({ runId: run.id, kind: row.kind, data: row.data })));
+		}
+		// Updated rather than deleted and re-inserted: the row is unique on
+		// (run_id, kind), and keeping it is what keeps the id stable.
+		if (staleSplits) {
+			await tx
+				.update(runStreams)
+				.set({ data: staleSplits.data })
+				.where(and(eq(runStreams.runId, run.id), eq(runStreams.kind, "splits")));
 		}
 		if (metricFields.length > 0) {
 			await tx
@@ -167,7 +211,7 @@ async function enrichExistingRun(userId: string, run: RunRecord, workout: Parsed
 		}
 	});
 
-	return [...missing.map((row) => row.kind), ...metricFields];
+	return [...missing.map((row) => row.kind), ...(staleSplits ? ["splits"] : []), ...metricFields];
 }
 
 /**

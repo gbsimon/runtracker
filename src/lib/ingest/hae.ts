@@ -128,10 +128,19 @@ export type Split = {
 	km: number;
 	/** Epoch seconds when this split ended. */
 	t: number;
+	/** Wall-clock seconds from the run's start to `t`, auto-pauses included. */
 	elapsedS: number;
+	/** **Moving** seconds for this kilometre — see `deriveSplits`. */
 	splitS: number;
 	distanceM: number;
+	/** Moving pace, so it reads the same as the watch's own splits. */
 	paceSPerKm: number;
+	/**
+	 * Seconds this split went by at a standstill, excluded from `splitS`.
+	 * Absent rather than `0` when the runner never stopped, which is what keeps
+	 * such a run serializing exactly as it did before this field existed.
+	 */
+	pausedS?: number;
 	partial?: true;
 };
 
@@ -355,32 +364,172 @@ function deriveCadence(value: unknown, startSeconds: number): CadenceSample[] {
 }
 
 /**
+ * Below this implied speed the runner was standing still rather than moving. It
+ * is the same half-a-metre-per-second standstill the map's pace bands use — see
+ * `MIN_SPEED_MS` in `src/lib/run-detail.ts`, which can't be imported here
+ * without dragging the database into the parser.
+ */
+const PAUSE_SPEED_MS = 0.5;
+
+/** A stretch of wall clock the runner spent stopped, in absolute epoch seconds. */
+type PausedSpan = { from: number; to: number };
+
+/**
+ * The stretches of a run that went by at a standstill.
+ *
+ * HAE's series are health-store-scoped, not workout-scoped, so they usually run
+ * straight *through* the watch's auto-pauses: a stoplight arrives as thirty
+ * one-second samples carrying no distance, not as a hole in the timestamps.
+ * Sometimes the samples stop instead. Both are the same event seen from
+ * different ends, so both are read the same way — a maximal run of consecutive
+ * samples whose implied speed is under `PAUSE_SPEED_MS`, however many samples
+ * that turns out to be.
+ *
+ * One `step` at the end of each stretch is kept as moving time: the sample that
+ * closes it still stands for its own interval, and the allowance is what stops
+ * an ordinary slow stretch from bleeding seconds. It is granted once per
+ * stretch, not per sample. A lone sample after a long gap is simply the
+ * one-sample case, and gives back `gap - step` exactly as it always has.
+ */
+function pausedSpans(samples: TimedQuantity[], step: number): PausedSpan[] {
+	const spans: PausedSpan[] = [];
+	/** Start of the stretch being accumulated: the last sample *before* it. */
+	let stretchFrom: number | null = null;
+
+	const close = (until: number): void => {
+		if (stretchFrom !== null && until - step > stretchFrom) spans.push({ from: stretchFrom, to: until - step });
+		stretchFrom = null;
+	};
+
+	// From `1`: the run's start to its first sample is the watch getting going,
+	// which is not something to charge anyone for.
+	for (let i = 1; i < samples.length; i++) {
+		const dt = samples[i].t - samples[i - 1].t;
+		if (dt > 0 && (samples[i].qty * 1000) / dt < PAUSE_SPEED_MS) {
+			if (stretchFrom === null) stretchFrom = samples[i - 1].t;
+		} else {
+			close(samples[i - 1].t);
+		}
+	}
+	close(samples[samples.length - 1].t);
+
+	return spans;
+}
+
+/**
+ * Seconds spent standing still before `t`. Spans are disjoint and in time
+ * order, which is what makes this 1-Lipschitz: over any window it can never
+ * return more paused seconds than the window has seconds.
+ */
+function pausedSecondsBefore(spans: PausedSpan[], t: number): number {
+	let total = 0;
+	for (const span of spans) {
+		if (span.from >= t) break;
+		total += Math.min(t, span.to) - span.from;
+	}
+	return total;
+}
+
+/**
  * `walkingAndRunningDistance` arrives as per-sample distance deltas in km
  * (despite the schema note calling it cumulative — the observed values sum to
  * the workout total). Running them up gives the kilometre marks, with the
  * crossing time interpolated inside the sample that straddles each boundary.
+ *
+ * Two things separate the *workout* from the series it is drawn out of, both of
+ * them because HAE's series belong to the health store rather than to the
+ * workout, and so keep recording through everything the watch excludes.
+ *
+ * **Standstills are taken out of the split times.** Time the runner spent
+ * stopped is charged to `pausedS` and kept out of `splitS`, so a traffic light
+ * no longer lands on whichever kilometre it was waited out in. `pausedSpans`
+ * finds the stretches; they are attributed to splits strictly by time, so a
+ * stretch straddling a kilometre mark is divided between the two.
+ *
+ * **A tail beyond the workout's own distance is dropped.** Press pause and jog
+ * home and the series keeps accruing: on the captured 17.01 km run the samples
+ * summed to 17.58 km, enough to invent an eighteenth kilometre Apple never
+ * counted. `distanceCapM` is the workout's own `distance`, and once the running
+ * total reaches it the final partial is interpolated to land exactly there and
+ * nothing further is read — neither its distance nor its time reaches a split.
+ * With no cap given, or a series that never reaches it, nothing changes.
+ *
+ * So `splitS` and `paceSPerKm` are **moving** figures, `pausedS` records what
+ * was taken out (omitted when nothing was), and `t`/`elapsedS` stay wall-clock:
+ * `splitS + pausedS` is always the span from the previous boundary to this one.
+ * A boundary crossed inside a standstill is interpolated over that sample's
+ * moving tail, which keeps `t` at or after the previous boundary and so keeps
+ * the series monotonic. A run that never stopped and never overran its distance
+ * comes out byte-for-byte as it did before any of this existed.
  */
-function deriveSplits(value: unknown, startSeconds: number): Split[] {
+function deriveSplits(value: unknown, startSeconds: number, distanceCapM: number | null): Split[] {
 	const samples = timedQuantities(value);
 	if (samples.length === 0) return [];
+
+	const step = sampleStepSeconds(samples);
+	const spans = pausedSpans(samples, step);
+	// A missing or nonsensical workout distance simply doesn't cap anything.
+	const cap = distanceCapM !== null && distanceCapM > 0 ? distanceCapM : null;
 
 	const splits: Split[] = [];
 	let cumulative = 0;
 	let previousT = startSeconds;
 	let previousBoundaryT = startSeconds;
+	/** Paused seconds already charged to earlier splits. */
+	let pausedAtBoundary = 0;
 	let km = 0;
+	let capped = false;
 
-	for (const sample of samples) {
+	/**
+	 * Closes the window ending at `t` and moves the boundary on: the wall clock
+	 * since the last boundary, less however much of it went by at a standstill.
+	 * `splitS + pausedS` is that wall clock exactly, by construction.
+	 */
+	const closeWindow = (t: number): { splitS: number; pausedS: number } => {
+		const wallS = Math.max(0, t - previousBoundaryT);
+		const pausedS = Math.min(wallS, pausedSecondsBefore(spans, t) - pausedAtBoundary);
+		previousBoundaryT = t;
+		pausedAtBoundary += pausedS;
+		return { splitS: wallS - pausedS, pausedS };
+	};
+
+	/** The leftover metres, whether the series ran out or the cap did. */
+	const pushPartial = (t: number, leftover: number): void => {
+		if (!(leftover >= 1)) return;
+		const { splitS, pausedS } = closeWindow(t);
+		splits.push({
+			km: km + 1,
+			t,
+			elapsedS: t - startSeconds,
+			splitS,
+			distanceM: Math.round(leftover),
+			paceSPerKm: Math.round(splitS / (leftover / 1000)),
+			...(pausedS > 0 ? { pausedS } : {}),
+			partial: true,
+		});
+	};
+
+	for (let i = 0; i < samples.length; i++) {
+		const sample = samples[i];
+		const dt = i > 0 ? sample.t - samples[i - 1].t : 0;
+		const slow = dt > 0 && (sample.qty * 1000) / dt < PAUSE_SPEED_MS;
+
 		const before = cumulative;
 		cumulative += sample.qty * 1000;
+		const covered = cumulative - before;
 
-		while (cumulative >= (km + 1) * 1000) {
+		// A sample the runner stood still through only moves for its last step, so
+		// that tail is what a crossing inside it is interpolated over. Never more
+		// than the sample's own interval, which is what keeps `t` from sliding back
+		// behind the boundary before it.
+		const from = slow ? sample.t - Math.min(step, dt) : previousT;
+		const crossing = (at: number): number =>
+			Math.round(from + (covered > 0 ? (at - before) / covered : 1) * (sample.t - from));
+
+		while (cumulative >= (km + 1) * 1000 && (cap === null || (km + 1) * 1000 <= cap)) {
 			km += 1;
-			const boundary = km * 1000;
-			const span = cumulative - before;
-			const fraction = span > 0 ? (boundary - before) / span : 1;
-			const t = Math.round(previousT + fraction * (sample.t - previousT));
-			const splitS = Math.max(0, t - previousBoundaryT);
+			const t = crossing(km * 1000);
+			const { splitS, pausedS } = closeWindow(t);
 			splits.push({
 				km,
 				t,
@@ -388,26 +537,20 @@ function deriveSplits(value: unknown, startSeconds: number): Split[] {
 				splitS,
 				distanceM: 1000,
 				paceSPerKm: splitS,
+				...(pausedS > 0 ? { pausedS } : {}),
 			});
-			previousBoundaryT = t;
+		}
+
+		if (cap !== null && cumulative >= cap) {
+			pushPartial(crossing(cap), cap - km * 1000);
+			capped = true;
+			break;
 		}
 
 		previousT = sample.t;
 	}
 
-	const leftover = cumulative - km * 1000;
-	if (leftover >= 1) {
-		const splitS = Math.max(0, previousT - previousBoundaryT);
-		splits.push({
-			km: km + 1,
-			t: previousT,
-			elapsedS: previousT - startSeconds,
-			splitS,
-			distanceM: Math.round(leftover),
-			paceSPerKm: leftover > 0 ? Math.round(splitS / (leftover / 1000)) : 0,
-			partial: true,
-		});
-	}
+	if (!capped) pushPartial(previousT, cumulative - km * 1000);
 
 	return splits;
 }
@@ -467,14 +610,15 @@ function parseWorkout(workout: Row, extraRunFragments: readonly string[]): Parse
 
 	const startSeconds = Math.round(start.at.getTime() / MS);
 	const { points, first } = parseRoute(workout.route);
-	const splits = deriveSplits(workout.walkingAndRunningDistance, startSeconds);
 
-	// `distance` is kilometres; the splits are the fallback when it's absent.
+	// `distance` is kilometres, and it is the *workout's* — the sample series is
+	// the health store's and can outrun it, so this is also what caps the splits.
+	// They are in turn the fallback for it, on a workout that states no distance.
 	const distanceKm = qty(workout.distance);
-	const distanceM =
-		distanceKm !== null
-			? (round(distanceKm * 1000, 2) as number)
-			: splits.reduce((total, split) => total + split.distanceM, 0);
+	const officialDistanceM = distanceKm === null ? null : (round(distanceKm * 1000, 2) as number);
+	const splits = deriveSplits(workout.walkingAndRunningDistance, startSeconds, officialDistanceM);
+
+	const distanceM = officialDistanceM ?? splits.reduce((total, split) => total + split.distanceM, 0);
 	if (!(distanceM > 0)) return skip(externalId, "no distance recorded");
 
 	const durationS =

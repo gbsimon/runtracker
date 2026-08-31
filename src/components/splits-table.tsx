@@ -31,6 +31,14 @@ export function SplitsTable({ splits, stats }: { splits: SplitRow[]; stats: Spli
 	const showHr = splits.some((split) => split.avgHr !== null);
 	const showElevation = splits.some((split) => split.elevationDeltaM !== null);
 
+	const footnotes: string[] = [];
+	if (splits.some((split) => split.partial)) {
+		footnotes.push("The last row is the leftover distance; its pace is scaled to a full kilometre.");
+	}
+	if (splits.some((split) => split.pausedS)) {
+		footnotes.push("Paced on moving time — the watch's auto-pauses are noted and not counted.");
+	}
+
 	return (
 		<div className="card p-4 sm:p-5">
 			<div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -71,6 +79,11 @@ export function SplitsTable({ splits, stats }: { splits: SplitRow[]; stats: Spli
 				<tbody>
 					{splits.map((split) => {
 						const isFastest = stats.fastest?.km === split.km;
+						// One muted line under the pace, carrying whatever this row has to
+						// qualify: a short final kilometre, time the watch spent paused.
+						const notes: string[] = [];
+						if (split.partial) notes.push(`final ${(split.distanceM / 1000).toFixed(2)} km in ${formatDuration(split.splitS)}`);
+						if (split.pausedS) notes.push(`+${formatDuration(split.pausedS)} paused`);
 						return (
 							<tr key={split.km} className="border-t border-white/5">
 								<th scope="row" className="py-1.5 text-left font-medium text-gray-400">
@@ -88,11 +101,7 @@ export function SplitsTable({ splits, stats }: { splits: SplitRow[]; stats: Spli
 											{formatDuration(split.paceSPerKm)}
 										</span>
 									</div>
-									{split.partial ? (
-										<span className="text-[10px] text-gray-600">
-											final {(split.distanceM / 1000).toFixed(2)} km in {formatDuration(split.splitS)}
-										</span>
-									) : null}
+									{notes.length > 0 ? <span className="text-[10px] text-gray-600">{notes.join(" • ")}</span> : null}
 								</td>
 								<td className="hidden py-1.5 text-right text-gray-500 sm:table-cell">{formatElapsed(split.elapsedS)}</td>
 								{showHr ? <td className="py-1.5 text-right text-gray-400">{split.avgHr ?? "–"}</td> : null}
@@ -105,11 +114,7 @@ export function SplitsTable({ splits, stats }: { splits: SplitRow[]; stats: Spli
 				</tbody>
 			</table>
 
-			{splits.some((split) => split.partial) ? (
-				<p className="mt-2 text-[11px] text-gray-600">
-					The last row is the leftover distance; its pace is scaled to a full kilometre.
-				</p>
-			) : null}
+			{footnotes.length > 0 ? <p className="mt-2 text-[11px] text-gray-600">{footnotes.join(" ")}</p> : null}
 		</div>
 	);
 }

@@ -132,10 +132,18 @@ retroactively unmake a row, and deleting one is a separate, manual decision.
    apart). `stepCount` behaves the same way — per-sample step deltas summing to
    17,013 steps, which over 105 min gives 161.9 spm, matching `stepCadence`
    161.92. The parser runs both up itself.
-2. **Series can outlast `duration`.** The Aug 15 samples span 6,311 s while
-   `duration` reads 6,304.06 s — `duration` excludes auto-pauses. Splits are
-   therefore timed off the samples, and `duration_s` still comes from
-   `duration`.
+2. **Series are health-store-scoped, not workout-scoped.** They run straight
+   through the watch's pauses: on the Aug 29 run (17.01 km official) the
+   samples span 7,234 s and sum to 17.58 km against a `duration` of 6,927 s —
+   the runner paused near the end and kept moving, and Apple excluded that
+   time *and* distance while the series kept recording both. No pause markers
+   exist anywhere in the payload (`metadata` is empty; no `workoutEvents` —
+   a confirmed gap in HAE's documented schema, not a settings matter). So
+   `duration_s` comes from `duration`, and `deriveSplits` reconstructs moving
+   time itself: standstill stretches (implied speed under 0.5 m/s, gaps and
+   zero-distance samples alike) are charged to `pausedS`, and the split total
+   is capped at the workout's own `distance`. Validated against Apple
+   Fitness's split sheet for that run: within 5 s over 17 km.
 3. `route` carries one more point than there are `walkingAndRunningDistance`
    samples (6,315 vs 6,304); neither array can be assumed to align by index.
 

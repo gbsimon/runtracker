@@ -1,11 +1,15 @@
 /**
  * Unit checks for the Health Auto Export parser, the reconciliation rules and
- * the weather merge, run against the real captured payload.
+ * the weather merge.
  *
  *   pnpm check:hae
  *
- * The fixture is gitignored (real GPS on a public repo), so this prints
- * aggregates and never a coordinate.
+ * Two kinds of section live here. Most build their payload inline and run
+ * anywhere. The rest are backed by the real captured payload, which is
+ * gitignored (real GPS on a public repo) and therefore absent on a fresh
+ * clone — those go through `withFixture`, which skips them with a note rather
+ * than taking the whole script down. Either way this prints aggregates and
+ * never a coordinate.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -14,10 +18,12 @@ import {
 	isRunName,
 	MAX_EXTRA_RUN_FRAGMENTS,
 	normalizeRunFragments,
+	type ParsedPayload,
 	type ParsedWorkout,
 	parseHaePayload,
 	parseHaeTimestamp,
 	RUN_NAME_FRAGMENTS,
+	type Split,
 	workoutRunFields,
 	workoutStreamRows,
 } from "../src/lib/ingest/hae.ts";
@@ -54,12 +60,46 @@ function section(title: string): void {
 	console.log(`\n${title}`);
 }
 
-if (!existsSync(FIXTURE)) {
-	console.error(`Missing ${FIXTURE} — the real capture is gitignored; copy it in before running these checks.`);
-	process.exit(1);
-}
+/** The real capture and what the parser makes of it — the two runs it holds. */
+type Fixture = {
+	/** The raw JSON, typed only as far as the checks below actually read it. */
+	payload: { data: { workouts: { name: string }[] } };
+	parsed: ParsedPayload;
+	/** Aug 15, 15.7 km. */
+	long: ParsedWorkout;
+	/** Aug 12, 6.3 km, no native weather. */
+	tempo: ParsedWorkout;
+};
 
-const payload = JSON.parse(readFileSync(FIXTURE, "utf8"));
+const fixture: Fixture | null = (() => {
+	if (!existsSync(FIXTURE)) return null;
+	const payload = JSON.parse(readFileSync(FIXTURE, "utf8"));
+	const parsed = parseHaePayload(payload);
+	const byId = new Map(parsed.workouts.map((workout) => [workout.externalId, workout]));
+	return {
+		payload,
+		parsed,
+		long: byId.get("B69495E1-8768-49D3-9CBD-B32599863E13") as ParsedWorkout,
+		tempo: byId.get("8F8D735F-6B42-4815-9057-1C3FA052762B") as ParsedWorkout,
+	};
+})();
+
+let skippedSections = 0;
+
+/**
+ * A section that can only run against the real capture. Absent, it is announced
+ * as skipped and the run carries on — a fresh clone still gets every synthetic
+ * check, and only a genuine failure sets the exit code.
+ */
+function withFixture(title: string, body: (fixture: Fixture) => void): void {
+	section(title);
+	if (!fixture) {
+		skippedSections += 1;
+		console.log(`  · skipped — ${FIXTURE} is gitignored and not present`);
+		return;
+	}
+	body(fixture);
+}
 
 section("Timestamp parsing (HAE's non-ISO format)");
 {
@@ -76,17 +116,12 @@ section("Timestamp parsing (HAE's non-ISO format)");
 	eq("non-string rejected", parseHaeTimestamp(1_755_282_000), null);
 }
 
-section("Parsing the real 2-workout payload");
-const parsed = parseHaePayload(payload);
-eq("workouts accepted", parsed.workouts.length, 2);
-eq("workouts skipped", parsed.skipped.length, 0);
+withFixture("Parsing the real 2-workout payload", ({ parsed }) => {
+	eq("workouts accepted", parsed.workouts.length, 2);
+	eq("workouts skipped", parsed.skipped.length, 0);
+});
 
-const byId = new Map(parsed.workouts.map((workout) => [workout.externalId, workout]));
-const long = byId.get("B69495E1-8768-49D3-9CBD-B32599863E13") as ParsedWorkout;
-const tempo = byId.get("8F8D735F-6B42-4815-9057-1C3FA052762B") as ParsedWorkout;
-
-section("Aug 15 long run — scalars from tasks/hae-schema.md");
-{
+withFixture("Aug 15 long run — scalars from tasks/hae-schema.md", ({ long }) => {
 	eq("started_at", long.startedAt.toISOString(), "2026-08-15T18:19:19.000Z");
 	eq("timezone (offset stands in for the IANA zone)", long.timezone, "-04:00");
 	eq("local date", long.localDate, "2026-08-15");
@@ -104,10 +139,9 @@ section("Aug 15 long run — scalars from tasks/hae-schema.md");
 	eq("weather source", long.weather?.source, "apple");
 	eq("indoor flag", long.isIndoor, false);
 	check("first GPS point captured", long.firstPoint !== null, long.firstPoint ? "redacted" : "missing");
-}
+});
 
-section("Aug 12 tempo run — the workout with no native weather");
-{
+withFixture("Aug 12 tempo run — the workout with no native weather", ({ tempo }) => {
 	eq("started_at", tempo.startedAt.toISOString(), "2026-08-12T13:13:50.000Z");
 	eq("local date", tempo.localDate, "2026-08-12");
 	close("distance_m", tempo.distanceM, 6311.44, 0.01);
@@ -116,10 +150,9 @@ section("Aug 12 tempo run — the workout with no native weather");
 	close("elevation_gain_m", tempo.elevationGainM, 26.07, 0.01);
 	eq("weather absent", tempo.weather, null);
 	eq("max_hr", tempo.maxHr, 163);
-}
+});
 
-section("Streams — thinned shapes and counts");
-{
+withFixture("Streams — thinned shapes and counts", ({ long }) => {
 	eq("route points", long.streams.route.length, 6315);
 	eq("heart-rate samples", long.streams.heart_rate.length, 1263);
 	eq("route sample keys", Object.keys(long.streams.route[0]).sort().join(","), "alt,lat,lng,t,v");
@@ -148,10 +181,9 @@ section("Streams — thinned shapes and counts");
 		.sort()
 		.join(",");
 	eq("stored stream kinds", kinds, "cadence,heart_rate,hr_recovery,route,splits");
-}
+});
 
-section("Heart-rate recovery — the tail after the run stops (item 21c)");
-{
+withFixture("Heart-rate recovery — the tail after the run stops (item 21c)", ({ long, tempo }) => {
 	const recovery = long.streams.hr_recovery;
 	eq("Aug 15 recovery samples", recovery.length, 24);
 	eq("Aug 12 recovery samples", tempo.streams.hr_recovery.length, 24);
@@ -184,10 +216,9 @@ section("Heart-rate recovery — the tail after the run stops (item 21c)");
 		"the two series don't overlap",
 		long.streams.heart_rate.at(-1)!.t <= recovery[0].t,
 	);
-}
+});
 
-section("Energy and top speed → runs.metrics (item 21c)");
-{
+withFixture("Energy and top speed → runs.metrics (item 21c)", ({ long, tempo }) => {
 	// `activeEnergyBurned` is kJ; `maxSpeed` is km/h behind a units string
 	// reading "km", so the route's own m/s speeds are what pin the unit down.
 	close("Aug 15 energy (kJ)", long.metrics?.energyKj ?? null, 5808.82, 0.01);
@@ -201,6 +232,13 @@ section("Energy and top speed → runs.metrics (item 21c)");
 	close("Aug 12 max speed (m/s)", tempo.metrics?.maxSpeedMs ?? null, 3.54, 0.01);
 
 	eq("metrics ride on the run row", JSON.stringify(workoutRunFields(long).metrics), JSON.stringify(long.metrics));
+});
+
+section("runs.metrics, read back and merged");
+{
+	// The same pair of numbers the Aug 15 run carries, stated here so the merge
+	// rules are checked on any machine rather than only where the capture is.
+	const measured = { energyKj: 5808.82, maxSpeedMs: 3.27 };
 
 	// Reading back what the jsonb column holds.
 	eq("an empty object is not data", readRunMetrics({}), null);
@@ -208,18 +246,17 @@ section("Energy and top speed → runs.metrics (item 21c)");
 	eq("a partial value survives", readRunMetrics({ energyKj: 12 })?.maxSpeedMs, null);
 
 	// The enrichment pass only ever fills gaps.
-	const filled = mergeRunMetrics(null, long.metrics);
+	const filled = mergeRunMetrics(null, measured);
 	eq("enrichment adds both fields to a bare run", filled.added.join(","), "energyKj,maxSpeedMs");
-	const kept = mergeRunMetrics({ energyKj: 1, maxSpeedMs: 2 }, long.metrics);
+	const kept = mergeRunMetrics({ energyKj: 1, maxSpeedMs: 2 }, measured);
 	eq("stored values are never overwritten", kept.added.length, 0);
 	eq("…and keep their value", kept.metrics?.energyKj, 1);
-	const gap = mergeRunMetrics({ energyKj: 1 }, long.metrics);
+	const gap = mergeRunMetrics({ energyKj: 1 }, measured);
 	eq("only the missing field is written", gap.added.join(","), "maxSpeedMs");
 	eq("nothing to add is a no-op", mergeRunMetrics({ energyKj: 1 }, null).added.length, 0);
 }
 
-section("Splits — derived per kilometre");
-{
+withFixture("Splits — derived per kilometre", ({ long, tempo }) => {
 	const splits = long.streams.splits;
 	eq("kilometres covered", splits.length, 16);
 	eq("last split is the partial one", splits.at(-1)?.partial, true);
@@ -233,10 +270,12 @@ section("Splits — derived per kilometre");
 
 	const elapsed = splits.at(-1)?.elapsedS ?? 0;
 	check("last split lands inside the run", elapsed <= long.durationS + 60, `${elapsed}s of ${Math.round(long.durationS)}s`);
-	check(
-		"split seconds add up to elapsed",
-		Math.abs(splits.reduce((sum, split) => sum + split.splitS, 0) - elapsed) <= 2,
-	);
+	// `splitS` is moving time, so it is moving *plus paused* that has to close on
+	// the wall clock. With no auto-pause in the capture the two are the same sum.
+	const moving = splits.reduce((sum, split) => sum + split.splitS, 0);
+	const paused = splits.reduce((sum, split) => sum + (split.pausedS ?? 0), 0);
+	check("split seconds add up to elapsed", Math.abs(moving + paused - elapsed) <= 2, `${moving} + ${paused} vs ${elapsed}`);
+	check("moving time never exceeds the wall clock", moving <= elapsed + 2, `${moving} of ${elapsed}`);
 	check(
 		"paces are plausible for a 6:41/km average",
 		splits.every((split) => split.paceSPerKm > 200 && split.paceSPerKm < 900),
@@ -244,10 +283,230 @@ section("Splits — derived per kilometre");
 
 	const tempoTotal = tempo.streams.splits.reduce((sum, split) => sum + split.distanceM, 0);
 	close("Aug 12 splits sum ≈ its distance", tempoTotal, tempo.distanceM, tempo.distanceM * 0.01);
+});
+
+section("Splits — pause-aware");
+{
+	/** A fixed morning start; every sample below is stated as seconds into it. */
+	const START = "2026-08-20 06:00:00 -0400";
+	const START_SEC = Math.round((parseHaeTimestamp(START) as { at: Date }).at.getTime() / 1000);
+
+	/** Back to HAE's own stamp: a wall clock in the phone's offset, not ISO. */
+	function stamp(offsetS: number): string {
+		const shifted = new Date((START_SEC + offsetS - 4 * 3600) * 1000).toISOString();
+		return `${shifted.slice(0, 10)} ${shifted.slice(11, 19)} -0400`;
+	}
+
+	/**
+	 * One synthetic run through the whole parser, `t` handed back as seconds in.
+	 * `officialKm` is what the workout *declares* it covered, which is what caps
+	 * the splits: left out it agrees with the samples, `null` omits the field
+	 * altogether so nothing caps at all.
+	 */
+	function splitsFor(samples: { at: number; km: number }[], officialKm?: number | null): Split[] {
+		const declared = officialKm === undefined ? samples.reduce((sum, sample) => sum + sample.km, 0) : officialKm;
+		const parsed = parseHaePayload({
+			data: {
+				workouts: [
+					{
+						id: "pause-1",
+						name: "Outdoor Run",
+						start: START,
+						end: stamp(samples.at(-1)?.at ?? 0),
+						duration: samples.at(-1)?.at ?? 0,
+						...(declared === null ? {} : { distance: { qty: declared, units: "km" } }),
+						walkingAndRunningDistance: samples.map((sample) => ({ date: stamp(sample.at), qty: sample.km, units: "km" })),
+					},
+				],
+			},
+		});
+		return (parsed.workouts[0]?.streams.splits ?? []).map((split) => ({ ...split, t: split.t - START_SEC }));
+	}
+
+	/** `qty` for a metre count, and a run of one-second samples at a fixed pace. */
+	const M = (metres: number) => metres / 1000;
+	const steady = (fromS: number, toS: number, offsetS = 0, metres = 3) =>
+		Array.from({ length: toS - fromS + 1 }, (_, i) => ({ at: fromS + i + offsetS, km: M(metres) }));
+
+	const total = (splits: Split[], pick: (split: Split) => number) => splits.reduce((sum, split) => sum + pick(split), 0);
+	const moving = (splits: Split[]) => total(splits, (split) => split.splitS);
+	const stopped = (splits: Split[]) => total(splits, (split) => split.pausedS ?? 0);
+
+	/**
+	 * The whole contract in one line: every split's moving time plus what it gave
+	 * back to pauses is the wall clock from the previous boundary to this one,
+	 * boundaries never go backwards, and no split runs negative.
+	 */
+	function invariants(label: string, splits: Split[]): void {
+		let previous = 0;
+		let ok = splits.length > 0;
+		for (const split of splits) {
+			const wall = split.t - previous;
+			if (wall < 0 || split.splitS < 0 || split.splitS + (split.pausedS ?? 0) !== wall) ok = false;
+			previous = split.t;
+		}
+		check(label, ok, splits.map((s) => `${s.km}:${s.t}=${s.splitS}+${s.pausedS ?? 0}`).join(" "));
+	}
+
+	// 1. No gaps at all — the algorithm as it has always behaved, stated exactly.
+	//    700 s at a flat 3 m/s is 2.1 km: two full splits and a 100 m leftover.
+	{
+		const splits = splitsFor(steady(1, 700));
+		eq("continuous run: three splits", splits.length, 3);
+		eq(
+			"…km 1 verbatim",
+			JSON.stringify(splits[0]),
+			'{"km":1,"t":333,"elapsedS":333,"splitS":333,"distanceM":1000,"paceSPerKm":333}',
+		);
+		eq(
+			"…km 2 verbatim",
+			JSON.stringify(splits[1]),
+			'{"km":2,"t":667,"elapsedS":667,"splitS":334,"distanceM":1000,"paceSPerKm":334}',
+		);
+		eq(
+			"…the partial verbatim",
+			JSON.stringify(splits[2]),
+			'{"km":3,"t":700,"elapsedS":700,"splitS":33,"distanceM":100,"paceSPerKm":330,"partial":true}',
+		);
+		check("no pausedS key anywhere", splits.every((split) => !("pausedS" in split)));
+		eq("moving time is the whole wall clock", splits.reduce((sum, split) => sum + split.splitS, 0), 700);
+		invariants("invariants hold", splits);
+	}
+
+	// The same 30 s standstill told two ways: the samples stop dead (a hole in the
+	// timestamps), or they keep arriving at 1/s carrying nothing. HAE's series are
+	// health-store-scoped, so the second is what a real stoplight usually looks
+	// like — and both have to read identically. Cases 2 and 6.
+	const gapPause = [...steady(1, 200), { at: 230, km: 0 }, ...steady(1, 500, 230)];
+	const samplePause = [...steady(1, 200), ...steady(1, 30, 200, 0), ...steady(1, 500, 230)];
+
+	// 2. A 30 s standstill mid-kilometre: the samples stop, the clock doesn't.
+	//    Only the excess over one sample step is paused — the gap still stands
+	//    for one step of (zero-distance) moving time.
+	{
+		const splits = splitsFor(gapPause);
+		eq("paused run: three splits", splits.length, 3);
+		eq("km 1 ends at the same wall clock as always", splits[0].t, 363);
+		eq("…elapsed stays wall-clock", splits[0].elapsedS, 363);
+		eq("…the standstill is taken out of the split", splits[0].splitS, 334);
+		eq("…and recorded", splits[0].pausedS, 29);
+		eq("…so pace is the moving pace", splits[0].paceSPerKm, 334);
+		eq("km 1 spans boundary to boundary", splits[0].splitS + (splits[0].pausedS ?? 0), splits[0].t);
+		eq("km 2 saw no pause, so carries no field", "pausedS" in splits[1], false);
+		eq("…and times exactly as the unpaused run did", splits[1].splitS, 334);
+		eq("the partial is untouched too", splits[2].splitS, 33);
+		eq("total moving time is the clock less the pause", splits.reduce((sum, split) => sum + split.splitS, 0), 730 - 29);
+		invariants("invariants hold", splits);
+	}
+
+	// 3. The same 30 s gap, but the next sample carries 90 m — HAE dropped
+	//    samples while the runner kept going at 3 m/s, which is not a pause.
+	{
+		const splits = splitsFor([...steady(1, 200), { at: 230, km: M(90) }, ...steady(1, 500, 230)]);
+		check("a moving dropout is never paused", splits.every((split) => !("pausedS" in split)));
+		eq("km 1 times as if the samples had arrived", splits[0].splitS, 333);
+		eq("km 2 likewise", splits[1].splitS, 334);
+		eq("moving time is the whole wall clock", splits.reduce((sum, split) => sum + split.splitS, 0), 730);
+		invariants("invariants hold", splits);
+	}
+
+	// 4. A pause straddling the kilometre mark: 999 m in, then 30 s during which
+	//    3 m go by, which crosses 1 km inside the gap.
+	{
+		const splits = splitsFor([...steady(1, 333), { at: 363, km: M(3) }, ...steady(1, 367, 363)]);
+		eq("straddling pause: three splits", splits.length, 3);
+		check("boundaries stay in order", splits.every((split, i) => i === 0 || split.t > splits[i - 1].t), splits.map((s) => s.t).join(","));
+		check("no split runs negative", splits.every((split) => split.splitS >= 0));
+		eq("the boundary lands in the gap's moving tail", splits[0].t, 362);
+		eq("…the pause is charged to the split it fell in", splits[0].pausedS, 29);
+		eq("…leaving the moving time the run deserved", splits[0].splitS, 333);
+		eq("the next split starts clean", "pausedS" in splits[1], false);
+		invariants("invariants hold", splits);
+	}
+
+	// 5. Two pauses over one run: the sums close on the wall clock exactly.
+	{
+		const splits = splitsFor([
+			...steady(1, 150),
+			{ at: 180, km: 0 },
+			...steady(1, 220, 180),
+			{ at: 460, km: 0 },
+			...steady(1, 340, 460),
+		]);
+		eq("both pauses are found", stopped(splits), 29 + 59);
+		eq("moving time is the clock less both", moving(splits), 800 - stopped(splits));
+		eq("…and the two add back up to it", moving(splits) + stopped(splits), splits.at(-1)?.t);
+		invariants("invariants hold", splits);
+	}
+
+	// 6. The same standstill with the samples still arriving — thirty one-second
+	//    rows carrying no distance, no hole in the timestamps at all. This is the
+	//    shape a real stoplight takes, and it has to read as the gap did.
+	{
+		const splits = splitsFor(samplePause);
+		eq("a standstill with no gap is still a standstill", splits[0].pausedS, 29);
+		eq("…the split shrinks by it", splits[0].splitS, 334);
+		eq("…and the wall clock is untouched", splits[0].t, 363);
+		eq(
+			"stopped samples and stopped clock give the very same splits",
+			JSON.stringify(splits),
+			JSON.stringify(splitsFor(gapPause)),
+		);
+		eq("one allowance for the whole stretch, not one per sample", moving(splits), 730 - 29);
+		invariants("invariants hold", splits);
+	}
+
+	// 7. A standstill stretch straddling the kilometre mark: 999 m in, then thirty
+	//    seconds shuffling at 0.3 m/s, which drifts over 1 km partway through.
+	//    The stretch is split between the two kilometres strictly by time.
+	{
+		const splits = splitsFor([...steady(1, 333), ...steady(1, 30, 333, 0.3), ...steady(1, 367, 363)]);
+		eq("straddling standstill: three splits", splits.length, 3);
+		check("boundaries stay in order", splits.every((split, i) => i === 0 || split.t > splits[i - 1].t), splits.map((s) => s.t).join(","));
+		check("no split runs negative", splits.every((split) => split.splitS >= 0));
+		eq("km 1 is charged only the seconds before the mark", splits[0].pausedS, 3);
+		eq("…and keeps the running it actually did", splits[0].splitS, 333);
+		eq("km 2 is charged the rest", splits[1].pausedS, 26);
+		eq("…and is not billed twice for it", splits[1].splitS, 332);
+		eq("the stretch is neither lost nor doubled", stopped(splits), 29);
+		eq("moving time is the clock less the standstill", moving(splits), 730 - 29);
+		invariants("invariants hold", splits);
+	}
+
+	// 8. Pressed pause and jogged home: the series keeps accruing past the
+	//    distance the workout claims. Everything after the workout's own distance
+	//    is health-store noise and must not reach a split — on the real 17.01 km
+	//    capture this surplus invented an eighteenth kilometre.
+	const jogHome = [...steady(1, 700), ...steady(1, 500, 700, 2.2)];
+	{
+		const plain = splitsFor(steady(1, 700));
+		const capped = splitsFor(jogHome, 2.1);
+		eq("the surplus buys no extra split", capped.length, 3);
+		eq("…and no time after the cap", capped.at(-1)?.t, 700);
+		eq("…the leftover is the declared distance's, not the samples'", capped.at(-1)?.distanceM, 100);
+		eq("…so the splits sum to what the workout says", total(capped, (split) => split.distanceM), 2100);
+		eq("1100 m of jogging home changes nothing at all", JSON.stringify(capped), JSON.stringify(plain));
+
+		// The cap only ever trims: a workout that never reaches its own distance,
+		// or declares one far beyond the samples, is left exactly as it was.
+		eq("a distance the run never reaches caps nothing", JSON.stringify(splitsFor(steady(1, 700), 5)), JSON.stringify(plain));
+	}
+
+	// 9. No declared distance, no cap — the old behaviour, phantom kilometre and
+	//    all. That is the right answer here: with nothing to measure against, the
+	//    samples are all the parser has.
+	{
+		const uncapped = splitsFor(jogHome, null);
+		eq("without a distance the surplus stands", uncapped.length, 4);
+		eq("…as a phantom third kilometre", uncapped[2].km, 3);
+		eq("…running to the last sample", uncapped.at(-1)?.t, 1200);
+		eq("…covering every sampled metre", total(uncapped, (split) => split.distanceM), 3200);
+		eq("a declared distance that agrees with the samples caps nothing either", JSON.stringify(splitsFor(jogHome)), JSON.stringify(uncapped));
+		invariants("invariants hold", uncapped);
+	}
 }
 
-section("Localized units can't change the result");
-{
+withFixture("Localized units can't change the result", ({ payload, parsed }) => {
 	// A French device sends `"pas"` for steps and mislabels km/h as `"km"`.
 	// Rewriting every units string, location and source to nonsense must be a
 	// no-op. `name` is deliberately left alone — it is the one localized string
@@ -270,7 +529,7 @@ section("Localized units can't change the result");
 		true,
 	);
 	eq("localized name carried through verbatim", rerun.workouts[0].name, "Extérieur Course");
-}
+});
 
 section("Run-type filter — the localized name is the only thing that states the type");
 {
@@ -363,13 +622,15 @@ section("Run-type filter — the localized name is the only thing that states th
 	eq("run fragments are lowercase and accent-free", RUN_NAME_FRAGMENTS.every((f) => f === f.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()), true);
 	eq("isRunName folds accents", isRunName("Extérieur Course") && isRunName("Exterieur Course"), true);
 	eq("isRunName rejects a hike either way", isRunName("Randonnée") || isRunName("Randonnee"), false);
+}
 
+withFixture("…and the same filter over the real capture", ({ payload, parsed }) => {
 	// The real capture, end to end: French names, two workouts, nothing skipped.
 	const fixtureNames: string[] = payload.data.workouts.map((workout: { name: string }) => workout.name);
 	eq("the real payload's names are the French ones", [...new Set(fixtureNames)].join(","), "Extérieur Course");
 	eq("…all clear the type filter", fixtureNames.every((name) => isRunName(name)), true);
 	eq("…and none of the two is skipped", parsed.skipped.length, 0);
-}
+});
 
 section("Per-user run-name allowlist (the Sync tab's 'allow this type')");
 {
@@ -462,8 +723,7 @@ section("Workout filtering");
 	eq("null payload yields nothing", parseHaePayload(null).workouts.length, 0);
 }
 
-section("Reconciliation against Simon's real manual rows");
-{
+withFixture("Reconciliation against Simon's real manual rows", ({ long, tempo }) => {
 	const manual = (id: string, startedAt: string, distanceM: number): ReconcileCandidate => ({
 		id,
 		source: "manual",
@@ -519,10 +779,12 @@ section("Reconciliation against Simon's real manual rows");
 
 	const both = findReconcileCandidate(long, [aug16Noon, sameDay]);
 	eq("a same-day candidate wins over a noon-import one", both?.run.id, "live");
-}
+});
 
 section("Weather");
 {
+	/** The Aug 15 start — only ever handed to a stubbed fetch, never a real one. */
+	const runStart = new Date("2026-08-15T18:19:19.000Z");
 	const apple: RunWeather = { tempC: 22.78, humidityPct: 50, source: "apple" };
 	const remote: RunWeather = { tempC: 24.1, humidityPct: 61, windKmh: 12.3, precipMm: 0, weatherCode: 3, source: "open-meteo" };
 
@@ -536,17 +798,17 @@ section("Weather");
 	eq("no weather at all wants a lookup", needsRemoteWeather(null), true);
 	eq("apple alone survives a failed lookup", mergeWeather(apple, null)?.source, "apple");
 
-	const offline = await fetchRunWeather(long.startedAt, 45.5, -73.6, {
+	const offline = await fetchRunWeather(runStart, 45.5, -73.6, {
 		fetchImpl: () => Promise.reject(new Error("network down")),
 	});
 	eq("a failed fetch resolves to null instead of throwing", offline, null);
 
-	const wrongShape = await fetchRunWeather(long.startedAt, 45.5, -73.6, {
+	const wrongShape = await fetchRunWeather(runStart, 45.5, -73.6, {
 		fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
 	});
 	eq("an unusable response resolves to null", wrongShape, null);
 
-	const notFound = await fetchRunWeather(long.startedAt, 45.5, -73.6, {
+	const notFound = await fetchRunWeather(runStart, 45.5, -73.6, {
 		fetchImpl: () => Promise.resolve(new Response("nope", { status: 500 })),
 	});
 	eq("a 500 resolves to null", notFound, null);
@@ -563,7 +825,8 @@ section("Ingest tokens");
 	check("the hash is not the token", !hashIngestToken(token).includes(token.slice(3)));
 }
 
-console.log(`\n${failures.length === 0 ? "PASS" : "FAIL"} — ${passed} checks passed, ${failures.length} failed`);
+const skipNote = skippedSections > 0 ? `, ${skippedSections} sections skipped (no ${FIXTURE})` : "";
+console.log(`\n${failures.length === 0 ? "PASS" : "FAIL"} — ${passed} checks passed, ${failures.length} failed${skipNote}`);
 if (failures.length > 0) {
 	for (const failure of failures) console.log(`  · ${failure}`);
 	process.exit(1);
