@@ -12,6 +12,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { isUniqueViolation } from "../src/lib/db-errors.ts";
 import {
 	buildCadenceSeries,
 	buildElevationSeries,
@@ -392,6 +393,23 @@ section("Weather, read back for display");
 	eq("an all-null row is not worth a line", readWeather({ tempC: null, humidityPct: null, source: "open-meteo" }), null);
 	eq("a temperature alone is worth a line", readWeather({ tempC: 12 })?.tempC, 12);
 	eq("NaN is not a temperature", readWeather({ tempC: "12" }), null);
+}
+
+section("Postgres error classification (ingest's duplicate-race guard)");
+{
+	eq("a plain postgres.js unique violation is recognized", isUniqueViolation({ code: "23505" }), true);
+	eq(
+		"a drizzle-wrapped one is unwrapped via .cause",
+		isUniqueViolation({ message: "Failed query", cause: { code: "23505" } }),
+		true,
+	);
+	eq("an unrelated postgres code is not a unique violation", isUniqueViolation({ code: "23502" }), false);
+	eq("an unrelated error wrapped by drizzle is not one either", isUniqueViolation({ cause: { code: "42601" } }), false);
+	eq("a plain Error with no code is not one", isUniqueViolation(new Error("boom")), false);
+	eq("a string is not one", isUniqueViolation("boom"), false);
+	eq("a number is not one", isUniqueViolation(23505), false);
+	eq("null is not one", isUniqueViolation(null), false);
+	eq("undefined is not one", isUniqueViolation(undefined), false);
 }
 
 section("Against the real capture");

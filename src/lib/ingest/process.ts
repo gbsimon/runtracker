@@ -10,6 +10,7 @@ import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { type DbExecutor, getDb } from "@/db";
 import { ingestEvents, runStreams, runs } from "@/db/schema";
 import { upsertDailyMetrics } from "../daily-metrics";
+import { isUniqueViolation } from "../db-errors";
 import { findMatchingWorkout, getPlan, markWorkoutComplete } from "../plan";
 import { mergeRunMetrics } from "../run-metrics";
 import { listRuns, type RunRecord } from "../runs";
@@ -230,6 +231,25 @@ async function completePlanDay(tx: DbExecutor, userId: string, localDate: string
 	return key;
 }
 
+/**
+ * A workout that already has a synced run — the outcome is "duplicate", or
+ * "enriched" when a newer parser filled in something the stored run lacked.
+ * The live webhook keeps this a plain no-op: a phone re-sending the same
+ * workout must stay cheap, and filling gaps is the Reprocess pass's job.
+ */
+async function duplicateOutcome(
+	userId: string,
+	workout: ParsedWorkout,
+	base: WorkoutOutcome,
+	duplicate: RunRecord,
+	options: IngestOptions,
+): Promise<WorkoutOutcome> {
+	const added = options.enrich ? await enrichExistingRun(userId, duplicate, workout) : [];
+	return added.length > 0
+		? { ...base, status: "enriched", runId: duplicate.id, added }
+		: { ...base, status: "duplicate", runId: duplicate.id, reason: "already synced" };
+}
+
 async function ingestWorkout(
 	userId: string,
 	workout: ParsedWorkout,
@@ -245,44 +265,55 @@ async function ingestWorkout(
 	};
 
 	const duplicate = await existingSyncedRun(userId, workout.externalId);
-	if (duplicate) {
-		// The live webhook keeps dedup a plain no-op — a phone re-sending the same
-		// workout must stay cheap. Filling gaps is the Reprocess pass's job.
-		const added = options.enrich ? await enrichExistingRun(userId, duplicate, workout) : [];
-		return added.length > 0
-			? { ...base, status: "enriched", runId: duplicate.id, added }
-			: { ...base, status: "duplicate", runId: duplicate.id, reason: "already synced" };
-	}
+	if (duplicate) return duplicateOutcome(userId, workout, base, duplicate, options);
 
 	const match = findReconcileCandidate(workout, candidates, { exclude: claimed });
 	const existingRun = match ? candidates.find((run) => run.id === match.run.id) : undefined;
 	const weather = await resolveWeather(workout, existingRun?.weather ?? null);
 	const fields = { ...workoutRunFields(workout), weather };
 
-	const written = await getDb().transaction(async (tx) => {
-		let id: string;
+	let written: { id: string; planKey?: string };
+	try {
+		written = await getDb().transaction(async (tx) => {
+			let id: string;
 
-		if (match) {
-			// Upgrade in place: the row keeps its id, its effort and its notes,
-			// and gains everything the watch measured.
-			const [row] = await tx
-				.update(runs)
-				.set(fields)
-				.where(and(eq(runs.id, match.run.id), eq(runs.userId, userId)))
-				.returning({ id: runs.id });
-			id = row.id;
-		} else {
-			const [row] = await tx
-				.insert(runs)
-				.values({ userId, ...fields })
-				.returning({ id: runs.id });
-			id = row.id;
-		}
+			if (match) {
+				// Upgrade in place: the row keeps its id, its effort and its notes,
+				// and gains everything the watch measured.
+				const [row] = await tx
+					.update(runs)
+					.set(fields)
+					.where(and(eq(runs.id, match.run.id), eq(runs.userId, userId)))
+					.returning({ id: runs.id });
+				id = row.id;
+			} else {
+				const [row] = await tx
+					.insert(runs)
+					.values({ userId, ...fields })
+					.returning({ id: runs.id });
+				id = row.id;
+			}
 
-		await writeStreams(tx, id, workout);
-		const planKey = await completePlanDay(tx, userId, workout.localDate);
-		return { id, planKey };
-	});
+			await writeStreams(tx, id, workout);
+			const planKey = await completePlanDay(tx, userId, workout.localDate);
+			return { id, planKey };
+		});
+	} catch (error) {
+		// Two requests for the same workout — a scheduled automation and a
+		// manual "Sync now" firing within seconds of each other — can both pass
+		// the dedup check above before either has inserted: neither sees the
+		// other's row yet, both sit through `resolveWeather`'s network call, and
+		// both reach this transaction. The loser hits the unique index on
+		// (user_id, source, external_id) here. Its transaction is rolled back
+		// automatically, so its streams and plan writes never land — only the
+		// winner's do. Re-read for the row the winner just committed and fold
+		// into the same "already synced" outcome the top-of-function branch
+		// returns, rather than surfacing a spurious failure.
+		if (!isUniqueViolation(error)) throw error;
+		const winner = await existingSyncedRun(userId, workout.externalId);
+		if (!winner) throw error;
+		return duplicateOutcome(userId, workout, base, winner, options);
+	}
 
 	if (match) claimed.add(match.run.id);
 
