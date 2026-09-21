@@ -124,10 +124,22 @@ export function weekDateRange(startISO: string, week: number): string {
 	return `${formatMonthDay(monday)} – ${formatMonthDay(addDaysISO(monday, 6))}`;
 }
 
-/** "30:00" or "1:12:30" → seconds. `null` when it isn't a duration. */
+/**
+ * Splits a clock-style string ("30:00", "30.00", "30,00") on its separator.
+ * Android's decimal keypad has no ":" key, so ":", "." and "," are all
+ * accepted (and may be mixed, e.g. "1.12:30"). Returns `null` unless every
+ * part is a non-empty run of digits.
+ */
+function splitClock(value: string): string[] | null {
+	const parts = value.trim().split(/[:.,]/).map((part) => part.trim());
+	if (!parts.every((part) => /^\d+$/.test(part))) return null;
+	return parts;
+}
+
+/** "30:00", "30.00" or "1:12:30" (":", "." or "," as separator, mixed is fine) → seconds. `null` when it isn't a duration. */
 export function parseDuration(value: string): number | null {
-	const parts = value.trim().split(":");
-	if (parts.length < 2 || parts.length > 3 || !parts.every((part) => /^\d+$/.test(part))) return null;
+	const parts = splitClock(value);
+	if (!parts || parts.length < 2 || parts.length > 3) return null;
 	const [hours, minutes, seconds] = parts.length === 3 ? parts : ["0", ...parts];
 	const total = Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
 	return total > 0 ? total : null;
@@ -138,11 +150,11 @@ export function formatDuration(totalSeconds: number): string {
 	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-/** "M:SS" pace → seconds per km; 0 when unset or unparseable. */
+/** "M:SS" or "M.SS" pace → seconds per km; 0 when unset or unparseable. */
 export function parsePace(value: string | null | undefined): number {
 	if (!value) return 0;
-	const parts = value.split(":");
-	if (parts.length !== 2 || !parts.every((part) => /^\d+$/.test(part.trim()))) return 0;
+	const parts = splitClock(value);
+	if (!parts || parts.length !== 2) return 0;
 	return Number(parts[0]) * 60 + Number(parts[1]);
 }
 

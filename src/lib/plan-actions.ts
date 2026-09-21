@@ -13,7 +13,7 @@ import {
 	updatePlanSettings,
 } from "@/lib/plan";
 import { isDayAbbr, MIN_PLAN_WEEKS, type PlanDay, type PlanSettings } from "@/lib/plan-types";
-import { isISODate, parsePace, weeksBetween } from "@/lib/running";
+import { formatPace, isISODate, parsePace, weeksBetween } from "@/lib/running";
 import { requireUser } from "@/lib/session";
 import { todayISO } from "@/lib/today";
 
@@ -59,7 +59,7 @@ function readSettings(formData: FormData): PlanSettings | string {
 		startDate,
 		raceDate,
 		raceDistance,
-		targetPace,
+		targetPace: targetPace ? formatPace(parsePace(targetPace)) : targetPace,
 		hidePastWeeks: formData.get("hidePastWeeks") !== "0",
 	};
 }
@@ -157,7 +157,7 @@ export async function updatePlanDayAction(_previous: PlanFormState, formData: Fo
 		distance,
 		notes: field(formData, "notes"),
 	};
-	if (pace) day.pace = pace;
+	if (pace) day.pace = formatPace(parsePace(pace));
 
 	if (!(await updatePlanDay(user.id, week, dayIdx, day))) return failed("That workout is gone.");
 

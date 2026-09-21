@@ -96,8 +96,9 @@ export function PlanDayEditor({ week, dayIdx, day }: { week: number; dayIdx: num
 									id={`pace-${week}-${dayIdx}`}
 									name="pace"
 									type="text"
-									inputMode="numeric"
-									pattern="[0-9]+:[0-5][0-9]"
+									inputMode="decimal"
+									pattern="[0-9]+[:.,][0-5][0-9]"
+									title="e.g. 6:00 or 6.00"
 									defaultValue={day.pace ?? ""}
 									placeholder="6:00"
 									className={INPUT}

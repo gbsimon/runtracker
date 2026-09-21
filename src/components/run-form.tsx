@@ -102,8 +102,9 @@ export function RunForm({
 							id="run-duration"
 							name="duration"
 							type="text"
-							inputMode="numeric"
-							pattern="[0-9]+:[0-5][0-9]"
+							inputMode="decimal"
+							pattern="[0-9]+[:.,][0-5][0-9]([:.,][0-5][0-9])?"
+							title="e.g. 30:00 or 30.00"
 							required
 							placeholder="30:00"
 							className={INPUT}

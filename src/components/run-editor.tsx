@@ -101,7 +101,7 @@ export function RunEditor({ run }: { run: EditableRun }) {
 									id={`edit-duration-${run.id}`}
 									name="duration"
 									type="text"
-									inputMode="numeric"
+									inputMode="decimal"
 									required
 									defaultValue={run.duration}
 									className={INPUT}
