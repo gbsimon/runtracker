@@ -1,8 +1,10 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { isOverDailyLimit, limitReachedMessage, recordMessageUsage } from "./ai-usage";
 import { COACH_REQUEST_DEFAULTS, getAnthropic } from "./anthropic";
 import { recoverySummary } from "./coach-context";
 import { withCoachModel } from "./coach-model";
 import { getDailyMetrics } from "./daily-metrics";
+import { errorFields, logEvent, usageFields, userTag } from "./log";
 import type { OpenBlockRequest } from "./plan";
 import { normalizePlanDay, type PlanDay, type PlanSettings, type PlanWeek, raceLabel } from "./plan-types";
 import { listRuns, runDistanceKm } from "./runs";
@@ -15,7 +17,16 @@ import { formatDuration, formatKm, isISODate, paceSeconds } from "./running";
  * budget. `plan-actions.ts` calls it with an id from `requireUser()`.
  */
 
-const MAX_TOKENS = 16000;
+/**
+ * A long race plan — 20-plus weeks, every day with notes and a pace — runs to
+ * roughly 8–10K output tokens; 32K leaves a wide margin. Anything above ~21K
+ * must be streamed: this SDK refuses a non-streaming request whose
+ * `max_tokens` implies more than ten minutes of generation
+ * (`calculateNonstreamingTimeout`). Sonnet 5's own ceiling is 128K, but the
+ * plan actions answer one HTTP request, and 32K keeps the slowest case well
+ * inside Railway's 15-minute request limit.
+ */
+const MAX_TOKENS = 32_000;
 const RECENT_RUNS = 10;
 /** Enough recovery history to tell "rested" from "run down" without a whole physiology dump. */
 const RECOVERY_DAYS = 7;
@@ -25,6 +36,101 @@ export class CoachBudgetError extends Error {
 	constructor() {
 		super(limitReachedMessage());
 		this.name = "CoachBudgetError";
+	}
+}
+
+/**
+ * The model stopped before the plan was complete. Its message is what the
+ * runner reads in front of "Generated the default plan instead", so it says
+ * what happened in plain words.
+ */
+export class PlanTruncatedError extends Error {
+	constructor() {
+		super("The AI plan was cut off before it finished.");
+		this.name = "PlanTruncatedError";
+	}
+}
+
+type PlanCall = { kind: "race_plan" | "open_block"; userId: string; today: string; system: string; content: string; weeks: number };
+
+/**
+ * One AI plan request: budget gate, model fallback, streamed (so a large
+ * `max_tokens` is allowed), usage metered, stop reason checked, and exactly
+ * one `[plan-ai]` log line whatever happens. Throws on any failure so the
+ * callers fall back to the standard plan and say so.
+ */
+async function requestPlanText(call: PlanCall, parse: (text: string) => PlanWeek[]): Promise<PlanWeek[]> {
+	const started = Date.now();
+	let model = "";
+	let response: Anthropic.Message | null = null;
+	let parsed: PlanWeek[] | null = null;
+
+	try {
+		if (await isOverDailyLimit(call.userId, call.today)) throw new CoachBudgetError();
+
+		response = await withCoachModel((candidate) => {
+			model = candidate;
+			return getAnthropic()
+				.messages.stream({
+					...COACH_REQUEST_DEFAULTS,
+					model: candidate,
+					max_tokens: MAX_TOKENS,
+					system: call.system,
+					messages: [{ role: "user", content: call.content }],
+				})
+				.finalMessage();
+		});
+
+		await recordMessageUsage(call.userId, call.today, response.usage);
+
+		if (response.stop_reason === "refusal") throw new Error("The AI declined to write this plan.");
+		// A cut-off array can still contain a `]` that closes an inner `days`
+		// list, so this is checked before parsing rather than left to JSON.parse.
+		if (response.stop_reason === "max_tokens") throw new PlanTruncatedError();
+
+		const text = response.content
+			.filter((block) => block.type === "text")
+			.map((block) => block.text)
+			.join("");
+		parsed = parse(text);
+		return parsed;
+	} catch (error) {
+		logEvent("plan-ai", call.kind, {
+			user: userTag(call.userId),
+			model: model || null,
+			stopReason: response?.stop_reason ?? null,
+			...usageFields(response?.usage),
+			durationMs: Date.now() - started,
+			weeksRequested: call.weeks,
+			outcome: error instanceof CoachBudgetError ? "over_budget" : "failed",
+			fallback: true,
+			...errorFields(error),
+		});
+		throw error;
+	} finally {
+		if (parsed) {
+			logEvent("plan-ai", call.kind, {
+				user: userTag(call.userId),
+				model,
+				stopReason: response?.stop_reason ?? null,
+				...usageFields(response?.usage),
+				durationMs: Date.now() - started,
+				weeksRequested: call.weeks,
+				weeksReturned: parsed.length,
+				outcome: "ok",
+			});
+		}
+	}
+}
+
+/** The array can arrive wrapped in prose or a code fence. */
+function parseWeeksArray(text: string): unknown {
+	const match = text.match(/\[[\s\S]*\]/);
+	if (!match) throw new Error("Could not parse plan from AI response");
+	try {
+		return JSON.parse(match[0]);
+	} catch {
+		throw new Error("Could not parse plan from AI response");
 	}
 }
 
@@ -105,44 +211,18 @@ export async function generateAIPlanWeeks(
 	numWeeks: number,
 	today: string,
 ): Promise<PlanWeek[]> {
-	if (await isOverDailyLimit(userId, today)) throw new CoachBudgetError();
-
 	const content = `Create a ${numWeeks}-week ${raceLabel(settings.raceDistance)} training plan for a beginner runner.\n\n${await runnerContext(userId, today)}`;
 
-	const response = await withCoachModel((model) =>
-		getAnthropic().messages.create({
-			...COACH_REQUEST_DEFAULTS,
-			model,
-			max_tokens: MAX_TOKENS,
-			system: systemPrompt(numWeeks, settings),
-			messages: [{ role: "user", content }],
-		}),
+	return requestPlanText(
+		{ kind: "race_plan", userId, today, system: systemPrompt(numWeeks, settings), content, weeks: numWeeks },
+		(text) => {
+			const weeks = normalizeWeeks(parseWeeksArray(text));
+			if (weeks.length === 0 || weeks.every((week) => week.days.length === 0)) {
+				throw new Error("The AI returned an empty plan");
+			}
+			return weeks;
+		},
 	);
-
-	await recordMessageUsage(userId, today, response.usage);
-
-	const text = response.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text)
-		.join("");
-
-	// The array can arrive wrapped in prose or a code fence.
-	const match = text.match(/\[[\s\S]*\]/);
-	if (!match) throw new Error("Could not parse plan from AI response");
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(match[0]);
-	} catch {
-		throw new Error("Could not parse plan from AI response");
-	}
-
-	const weeks = normalizeWeeks(parsed);
-	if (weeks.length === 0 || weeks.every((week) => week.days.length === 0)) {
-		throw new Error("The AI returned an empty plan");
-	}
-
-	return weeks;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +281,6 @@ function planTail(weeks: PlanWeek[]): string {
  */
 export async function generateAIOpenBlock(userId: string, request: OpenBlockRequest): Promise<PlanWeek[]> {
 	const { settings, today } = request;
-	if (await isOverDailyLimit(userId, today)) throw new CoachBudgetError();
 
 	const objective = settings.goal ? `Objective: ${settings.goal}` : "Objective: not set yet — build general fitness.";
 	const lastRace = isISODate(settings.raceDate)
@@ -218,39 +297,16 @@ ${volume}${planTail(request.weeks)}
 
 ${await runnerContext(userId, today)}`;
 
-	const response = await withCoachModel((model) =>
-		getAnthropic().messages.create({
-			...COACH_REQUEST_DEFAULTS,
-			model,
-			max_tokens: MAX_TOKENS,
-			system: openBlockSystemPrompt(request),
-			messages: [{ role: "user", content }],
-		}),
+	return requestPlanText(
+		{ kind: "open_block", userId, today, system: openBlockSystemPrompt(request), content, weeks: request.count },
+		(text) => {
+			// Renumbered from the block's first week, so a model that counted from 1
+			// still lands in the right place.
+			const weeks = normalizeWeeks(parseWeeksArray(text)).map((week, i) => ({ ...week, week: request.firstWeek + i }));
+			if (weeks.length === 0 || weeks.every((week) => week.days.length === 0)) {
+				throw new Error("The AI returned an empty plan");
+			}
+			return weeks;
+		},
 	);
-
-	await recordMessageUsage(userId, today, response.usage);
-
-	const text = response.content
-		.filter((block) => block.type === "text")
-		.map((block) => block.text)
-		.join("");
-
-	const match = text.match(/\[[\s\S]*\]/);
-	if (!match) throw new Error("Could not parse plan from AI response");
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(match[0]);
-	} catch {
-		throw new Error("Could not parse plan from AI response");
-	}
-
-	// Renumbered from the block's first week, so a model that counted from 1
-	// still lands in the right place.
-	const weeks = normalizeWeeks(parsed).map((week, i) => ({ ...week, week: request.firstWeek + i }));
-	if (weeks.length === 0 || weeks.every((week) => week.days.length === 0)) {
-		throw new Error("The AI returned an empty plan");
-	}
-
-	return weeks;
 }

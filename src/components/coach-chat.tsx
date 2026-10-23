@@ -26,7 +26,16 @@ const OPEN_GREETING =
 
 const OPEN_GREETING_MESSAGE: CoachChatMessage = { id: "greeting", role: "assistant", content: OPEN_GREETING };
 
-type StreamEvent = { type: "text"; text: string } | { type: "error"; message: string } | { type: "done" };
+/**
+ * `replace` swaps the whole reply so far — the server sends it when it
+ * re-requests a plan change that was cut off, so the broken half-block
+ * disappears instead of sitting above the complete one.
+ */
+type StreamEvent =
+	| { type: "text"; text: string }
+	| { type: "replace"; text: string }
+	| { type: "error"; message: string }
+	| { type: "done" };
 
 function localId(): string {
 	return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `local-${Date.now()}-${Math.random()}`;
@@ -137,13 +146,24 @@ export function CoachChat({
 					if (event.type === "text") {
 						reply += event.text;
 						setStreamed(reply);
+					} else if (event.type === "replace") {
+						reply = event.text;
+						setStreamed(reply);
 					} else if (event.type === "error") {
 						failure = event.message;
 					}
 				}
 			}
 		} catch (error) {
-			failure = error instanceof Error ? error.message : "Something went wrong talking to the coach.";
+			// Once text has arrived, a throw here is the connection dropping
+			// (`TypeError: Load failed` / `network error`) — the server keeps
+			// generating and stores the full reply regardless, so say where it is.
+			failure =
+				reply && error instanceof TypeError
+					? "The connection dropped before the reply finished. Reload the page to see the coach's full reply."
+					: error instanceof Error
+						? error.message
+						: "Something went wrong talking to the coach.";
 		}
 
 		// Mirrors what the server stored, so a reload shows the same thread.
@@ -277,7 +297,7 @@ export function CoachChat({
 							<div className="fade-in mr-8 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-gray-300">
 								<div className="mb-1 text-xs font-medium text-gray-500">Coach</div>
 								{streamed ? (
-									<CoachMessageBody content={streamed} plan={plan} />
+									<CoachMessageBody content={streamed} plan={plan} streaming />
 								) : (
 									<div className="flex items-center gap-2 text-gray-400">
 										<span

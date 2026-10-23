@@ -151,11 +151,17 @@ export function CoachMessageBody({
 	content,
 	plan,
 	live = true,
+	streaming = false,
 }: {
 	content: string;
 	plan: PlanSnapshot | null;
 	/** Whether this message is the newest one carrying a plan-change block. */
 	live?: boolean;
+	/**
+	 * The reply is still arriving. A block that hasn't closed yet is then just
+	 * unfinished, not cut off — the warning is only for a finished message.
+	 */
+	streaming?: boolean;
 }) {
 	return (
 		<div className="whitespace-pre-wrap">
@@ -164,10 +170,19 @@ export function CoachMessageBody({
 					return (
 						<span key={`text-${index}`}>
 							{renderInline(segment.text)}
-							{segment.truncated ? (
+							{segment.truncated && streaming ? (
+								<span className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-gray-400">
+									<span
+										aria-hidden="true"
+										className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/10 border-t-brand-500"
+									/>
+									Writing the plan change…
+								</span>
+							) : segment.truncated ? (
 								<span className="mt-3 block rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
 									⚠️ The coach&apos;s plan change was cut off before it finished. Ask the coach to resend it (e.g.
 									&ldquo;resend that plan change&rdquo;).
+									{segment.note ? <span className="mt-1 block text-amber-200/80">{segment.note}</span> : null}
 								</span>
 							) : null}
 						</span>

@@ -15,6 +15,7 @@ import {
 	formatWeekdayLong,
 	isISODate,
 	paceSeconds,
+	planWeekOfISO,
 	weekdayAbbrISO,
 	workoutDateISO,
 } from "./running";
@@ -507,6 +508,37 @@ export function openRunnerProfile(settings: PlanSettings | undefined): string {
 }
 
 /**
+ * The most weeks the onboarding reply may write in its one plan-change block.
+ * The first open-mode reply kept rewriting every upcoming week and appending
+ * more on top, with notes and paces on each day — a block that size is slow
+ * to stream and the likeliest to hit the output cap. One block now; the next
+ * comes from "Plan next 4 weeks" or a follow-up.
+ */
+export const ONBOARDING_BLOCK_MAX_WEEKS = 5;
+
+/** "Week 31" / "Weeks 31–34". */
+function weekSpan(from: number, to: number): string {
+	return from === to ? `Week ${from}` : `Weeks ${from}–${to}`;
+}
+
+/**
+ * Which weeks the onboarding block covers: the current week to the end of the
+ * plan, topped up with appended weeks to a 4-week block when the plan ends
+ * sooner, and never more than `ONBOARDING_BLOCK_MAX_WEEKS`.
+ */
+function onboardingScope(current: number | null, last: number): string {
+	if (current === null || current < 1 || current > last) {
+		return `full "days" for the current week through the end of the plan only — at most ${ONBOARDING_BLOCK_MAX_WEEKS} weeks`;
+	}
+	const end = Math.min(last, current + ONBOARDING_BLOCK_MAX_WEEKS - 1);
+	const topUp = current + 3 > last ? current + 3 : null;
+	const existing = `full "days" for ${weekSpan(current, end)} only (the current week to the end of the plan)`;
+	return topUp === null
+		? existing
+		: `${existing}, plus ${weekSpan(last + 1, topUp)} appended after Week ${last} to make a 4-week block`;
+}
+
+/**
  * Open mode's additions to the plan-change protocol. Appended after the v1
  * protocol rather than woven into it, so race mode's prompt is untouched and
  * the byte-for-byte check against v1 still holds.
@@ -541,7 +573,8 @@ Two optional additions to the plan-change block:
 ], "summary": "New objective and the first week of the next block"}
 :::
 
-Rules for a new block: 3 weeks building then 1 lighter week, start from the runner's actual recent weekly volume (WEEKLY VOLUME above), grow no more than ~10% a week, and give a recently raced runner an easy first week.`;
+Rules for a new block: 3 weeks building then 1 lighter week, start from the runner's actual recent weekly volume (WEEKLY VOLUME above), grow no more than ~10% a week, and give a recently raced runner an easy first week.
+Keep blocks compact: in open-ended training "include ALL weeks" (e.g. when adding paces) means the current week through the end of the plan — never past weeks, which are done — and each note is a few words.`;
 
 	if (nextInPast) {
 		out += `\nWeek ${next} is already in the past. Don't append weeks into the past — ask the runner to tap "Plan next 4 weeks" on the Plan page first (it fills the gap up to the current week), then adjust the new weeks.`;
@@ -552,7 +585,7 @@ Rules for a new block: 3 weeks building then 1 lighter week, start from the runn
 
 OBJECTIVE NOT SET YET — ONBOARDING:
 The runner has just moved to open-ended training and hasn't told you what they want next. Before anything else, interview them briefly, one or two short questions at a time — never a questionnaire. Find out: what they want from the next couple of months (e.g. get faster at 5K or 10K, build weekly volume, simply stay consistent, a future race), how many days a week they can run and which days suit them, and any injuries or niggles. Use what you already see in their data instead of asking for it.
-Once you know enough (usually after two or three exchanges), propose the objective and the next block in ONE plan-change block: the "goal", the upcoming weeks already in the plan (current week onward, rewritten to suit the objective — full "days" for each), and any new weeks appended after Week ${last}. Explain the plan in a few sentences before the block and tell them to hit Apply.`;
+Once you know enough (usually after two or three exchanges), propose the objective and the current block in ONE compact plan-change block: the "goal", plus ${onboardingScope(isISODate(startDate) ? planWeekOfISO(startDate, data.today) : null, last)}, rewritten to suit the objective. Never past weeks, never more than ${ONBOARDING_BLOCK_MAX_WEEKS} weeks, and keep each note to a few words. Don't plan further ahead: the blocks after this one come from "Plan next 4 weeks" on the Plan page or a later message — you can say what they will focus on in your text. Explain the plan in a few sentences before the block and tell them to hit Apply.`;
 	}
 
 	return out;

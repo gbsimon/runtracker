@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { CHAT_VIEW_LIMIT, clearChatMessages, listChatMessages } from "@/lib/chat";
+import { errorFields, logEvent, userTag } from "@/lib/log";
 import { applyPlanChange } from "@/lib/plan";
 import { revalidatePlanViews } from "@/lib/plan-actions";
 import {
@@ -32,29 +33,53 @@ export async function clearChatAction(): Promise<void> {
  */
 export async function applyPlanChangeAction(raw: string): Promise<CoachActionState> {
 	const user = await requireUser();
+	const started = Date.now();
+	const log = (outcome: string, fields: Record<string, unknown> = {}) =>
+		logEvent("coach", "apply_plan_change", {
+			user: userTag(user.id),
+			outcome,
+			rawChars: raw.length,
+			durationMs: Date.now() - started,
+			...fields,
+		});
 
 	const change = parsePlanChange(raw);
-	if (!change) return { status: "error", message: "Couldn't read that plan change — ask the coach to resend it." };
+	if (!change) {
+		log("unparseable");
+		return { status: "error", message: "Couldn't read that plan change — ask the coach to resend it." };
+	}
+	const shape = {
+		weeks: change.changes.length,
+		hasGoal: Boolean(change.goal),
+	};
 
-	// Defense in depth. The thread only draws a live button on the newest
-	// suggestion, but a tab left open since before the coach's next reply would
-	// still be holding one — so the rule is re-derived here, from the same
-	// helper and the same `CHAT_VIEW_LIMIT` window the thread renders.
-	const history = await listChatMessages(user.id, CHAT_VIEW_LIMIT);
-	const newest = history.find((message) => message.id === newestChangeMessageId(history));
-	const key = planChangeKey(change);
+	try {
+		// Defense in depth. The thread only draws a live button on the newest
+		// suggestion, but a tab left open since before the coach's next reply would
+		// still be holding one — so the rule is re-derived here, from the same
+		// helper and the same `CHAT_VIEW_LIMIT` window the thread renders.
+		const history = await listChatMessages(user.id, CHAT_VIEW_LIMIT);
+		const newest = history.find((message) => message.id === newestChangeMessageId(history));
+		const key = planChangeKey(change);
 
-	if (!newest || !planChangesIn(newest.content).some((candidate) => planChangeKey(candidate) === key)) {
-		return {
-			status: "error",
-			message: "That suggestion has been superseded — ask the coach again if you still want it.",
-		};
+		if (!newest || !planChangesIn(newest.content).some((candidate) => planChangeKey(candidate) === key)) {
+			log("superseded", shape);
+			return {
+				status: "error",
+				message: "That suggestion has been superseded — ask the coach again if you still want it.",
+			};
+		}
+
+		if (!(await applyPlanChange(user.id, change))) {
+			log("no_matching_weeks", shape);
+			return { status: "error", message: "Those weeks aren't in your plan any more." };
+		}
+	} catch (error) {
+		log("error", { ...shape, ...errorFields(error) });
+		return { status: "error", message: "Couldn't save that plan change. Try again in a moment." };
 	}
 
-	if (!(await applyPlanChange(user.id, change))) {
-		return { status: "error", message: "Those weeks aren't in your plan any more." };
-	}
-
+	log("applied", shape);
 	await revalidatePlanViews();
 	// The coach panel lives in the root layout now, so it has to be
 	// invalidated everywhere rather than on `/coach` alone.

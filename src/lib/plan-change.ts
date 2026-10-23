@@ -55,7 +55,17 @@ export type PlanChange = { changes: PlanChangeEntry[]; summary: string; goal?: {
 export type PlanSnapshot = { weeks: PlanWeek[]; skipped: WorkoutMap; goalMode?: GoalMode; goal?: string };
 
 export type MessageSegment =
-	| { kind: "text"; text: string; truncated: boolean }
+	| {
+			kind: "text";
+			text: string;
+			truncated: boolean;
+			/**
+			 * Only on a truncated segment: the "⚠️ …" note the server appended after
+			 * the broken block (a dropped connection, an API error). Without this it
+			 * would be swallowed with the half-written JSON it follows.
+			 */
+			note?: string;
+	  }
 	| { kind: "change"; raw: string; change: PlanChange | null };
 
 const BLOCK = /:::plan-change\n?([\s\S]*?)\n?:::/g;
@@ -221,13 +231,79 @@ export function splitMessage(content: string): MessageSegment[] {
 		if (index % 2 === 0) {
 			const cut = part.indexOf(OPENER);
 			const text = cut === -1 ? part : part.slice(0, cut);
-			if (text || cut !== -1) segments.push({ kind: "text", text, truncated: cut !== -1 });
+			if (cut === -1) {
+				if (text) segments.push({ kind: "text", text, truncated: false });
+			} else {
+				const segment: MessageSegment = { kind: "text", text, truncated: true };
+				const note = trailingNote(part.slice(cut));
+				if (note) segment.note = note;
+				segments.push(segment);
+			}
 		} else {
 			segments.push({ kind: "change", raw: part, change: parsePlanChange(part) });
 		}
 	});
 
 	return segments;
+}
+
+const NOTE_MARK = "\n\n⚠️ ";
+
+/** The server's "⚠️ …" failure note at the end of a cut-off block, if it left one. */
+function trailingNote(afterOpener: string): string | undefined {
+	const at = afterOpener.lastIndexOf(NOTE_MARK);
+	if (at === -1) return undefined;
+	const note = afterOpener.slice(at + 2).trim();
+	return note || undefined;
+}
+
+/** True when the reply opens a `:::plan-change` block that never closes. */
+export function hasUnclosedPlanChange(content: string): boolean {
+	return splitMessage(content).some((segment) => segment.kind === "text" && segment.truncated);
+}
+
+/**
+ * What a reply carries, for logs: no block, only complete blocks, a block
+ * that never closed, or a closed block that doesn't parse.
+ */
+export type PlanChangeStatus = "none" | "complete" | "truncated" | "invalid";
+
+export function planChangeStatus(content: string): PlanChangeStatus {
+	const segments = splitMessage(content);
+	if (segments.some((segment) => segment.kind === "text" && segment.truncated)) return "truncated";
+	const changes = segments.filter((segment) => segment.kind === "change");
+	if (changes.length === 0) return "none";
+	return changes.every((segment) => segment.change) ? "complete" : "invalid";
+}
+
+/**
+ * The reply up to (not including) the block that never closed — the prose the
+ * runner has already read. Returns the content unchanged when nothing is open.
+ */
+export function textBeforeUnclosedPlanChange(content: string): string {
+	if (!hasUnclosedPlanChange(content)) return content;
+	return content.slice(0, content.lastIndexOf(OPENER)).trimEnd();
+}
+
+/** The first complete, parseable block in `text`, verbatim, or `null`. */
+export function firstCompletePlanChange(text: string): string | null {
+	for (const match of text.matchAll(BLOCK)) {
+		if (parsePlanChange(match[1])) return match[0];
+	}
+	return null;
+}
+
+/**
+ * Joins the prose of a reply that was cut off inside its block with the block
+ * a follow-up request produced. Only a complete, parseable block is accepted;
+ * anything else returns `null` so the caller reports the cut-off honestly
+ * instead of storing a second broken block.
+ */
+export function stitchPlanChangeRetry(prose: string, retry: string): string | null {
+	const block = firstCompletePlanChange(retry);
+	if (!block) return null;
+	const head = prose.trimEnd();
+	return head ? `${head}\n\n${block}` : block;
 }
 
 /** Every parseable block in one assistant message, in order. */

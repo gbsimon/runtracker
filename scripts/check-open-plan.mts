@@ -16,11 +16,18 @@ import type { PlanRecord } from "../src/lib/plan.ts";
 import {
 	appendedWeeks,
 	applyChangeToPlan,
+	firstCompletePlanChange,
+	hasUnclosedPlanChange,
 	isPlanChangeApplied,
 	parsePlanChange,
 	planChangeKey,
 	planChangeLabel,
+	planChangesIn,
+	planChangeStatus,
 	type PlanSnapshot,
+	splitMessage,
+	stitchPlanChangeRetry,
+	textBeforeUnclosedPlanChange,
 } from "../src/lib/plan-change.ts";
 import {
 	appendWeeks,
@@ -400,6 +407,16 @@ section("Coach context: open-mode profile and onboarding");
 	has("…keeps the v1 protocol", onboarding, "PLAN MODIFICATIONS:");
 	has("onboarding when the objective is empty", onboarding, "OBJECTIVE NOT SET YET — ONBOARDING:");
 	has("…one or two questions at a time", onboarding, "one or two short questions at a time");
+	has("…asks for one compact block", onboarding, "ONE compact plan-change block");
+	has("…scoped to the current week through the plan end", onboarding, 'full "days" for Weeks 13–17 only (the current week to the end of the plan)');
+	has("…capped in size", onboarding, "never more than 5 weeks");
+	has("…defers later blocks", onboarding, '"Plan next 4 weeks" on the Plan page');
+	lacks("…no longer asks for every upcoming week plus appended ones", onboarding, "and any new weeks appended after Week");
+	has("open mode narrows \"ALL weeks\" to the current week onward", onboarding, '"include ALL weeks" (e.g. when adding paces) means the current week through the end of the plan');
+
+	// Week 16 of a plan ending at 17: two weeks left, so it tops up to four.
+	const late = buildCoachSystemPrompt({ plan: openPlan(""), runs: [], today: dayInWeek(16) });
+	has("near the plan end the block is topped up to 4 weeks", late, 'full "days" for Weeks 16–17 only (the current week to the end of the plan), plus Weeks 18–19 appended after Week 17 to make a 4-week block');
 
 	const settled = buildCoachSystemPrompt(data(openPlan("Sub-25 5K by March")));
 	has("open prompt with a goal still documents the protocol", settled, "OPEN-ENDED TRAINING (rolling plan):");
@@ -426,6 +443,55 @@ section("Coach context: open-mode profile and onboarding");
 		runs: [],
 		today: "2026-08-17",
 	}), "leftover");
+}
+
+// ---------------------------------------------------------------------------
+section("Plan-change truncation: detection and retry stitching");
+{
+	const block = `:::plan-change
+{"goal": {"text": "Sub-25 5K"}, "changes": [{"week": 14, "days": [{"day": "Tue", "type": "Easy Run", "distance": 5, "notes": "Easy"}]}], "summary": "s"}
+:::`;
+	const prose = "Here's the plan for the next block.";
+	const complete = `${prose}\n\n${block}\n\nHit Apply!`;
+	const cut = `${prose}\n\n:::plan-change\n{"goal": {"text": "Sub-25 5K"}, "changes": [{"week": 14, "days": [{"day": "Tue", "ty`;
+
+	eq("a complete reply has no unclosed block", hasUnclosedPlanChange(complete), false);
+	eq("a reply cut inside the block is unclosed", hasUnclosedPlanChange(cut), true);
+	eq("plain prose is not unclosed", hasUnclosedPlanChange("Just rest today."), false);
+	eq("status: none", planChangeStatus("Just rest today."), "none");
+	eq("status: complete", planChangeStatus(complete), "complete");
+	eq("status: truncated", planChangeStatus(cut), "truncated");
+	eq("status: invalid", planChangeStatus(`${prose}\n\n:::plan-change\n{"changes": "nope"}\n:::`), "invalid");
+	eq("a cut block after a complete one still counts as truncated", planChangeStatus(`${complete}\n\n${cut}`), "truncated");
+
+	eq("prose before the cut block", textBeforeUnclosedPlanChange(cut), prose);
+	eq("…and a complete reply is returned unchanged", textBeforeUnclosedPlanChange(complete), complete);
+	eq("…keeps an earlier complete block", textBeforeUnclosedPlanChange(`${complete}\n\n${cut}`), `${complete}\n\n${prose}`);
+
+	eq("first complete block is found verbatim", firstCompletePlanChange(`noise\n${block}\ntrailing`), block);
+	eq("…and an unparseable one is skipped", firstCompletePlanChange(':::plan-change\n{"changes": 1}\n:::'), null);
+
+	const stitched = stitchPlanChangeRetry(prose, `Sure — here it is:\n\n${block}\n\nDone.`);
+	eq("retry stitches prose + block only", stitched, `${prose}\n\n${block}`);
+	eq("…which renders as one parseable card", stitched ? planChangeStatus(stitched) : null, "complete");
+	eq("…and is a block the apply action will accept", stitched ? planChangesIn(stitched).length : 0, 1);
+	eq("a retry that is cut off again is rejected", stitchPlanChangeRetry(prose, cut), null);
+	eq("a retry with no block is rejected", stitchPlanChangeRetry(prose, "Sorry, here is a summary instead."), null);
+	eq("with no prose the block stands alone", stitchPlanChangeRetry("", block), block);
+
+	// The server's "⚠️ …" note after a broken block used to be swallowed with it.
+	const noted = `${cut}\n\n⚠️ The coach service returned an error (529). Try again.`;
+	const segments = splitMessage(noted);
+	const last = segments.at(-1);
+	eq("a cut block with a trailing note is still truncated", last?.kind === "text" && last.truncated, true);
+	eq("…and the note survives for the renderer", last?.kind === "text" ? last.note : undefined, "⚠️ The coach service returned an error (529). Try again.");
+	eq("…while the prose is unchanged", last?.kind === "text" ? last.text : undefined, `${prose}\n\n`);
+	eq("a cut block without a note carries none", (() => {
+		const tail = splitMessage(cut).at(-1);
+		return tail?.kind === "text" ? tail.note : "n/a";
+	})(), undefined);
+	same("splitMessage on a complete reply is unchanged in shape", splitMessage(complete).map((segment) => segment.kind), ["text", "change", "text"]);
+	same("…and its text segments carry no note key", splitMessage(complete).filter((segment) => segment.kind === "text").map((segment) => Object.keys(segment).sort()), [["kind", "text", "truncated"], ["kind", "text", "truncated"]]);
 }
 
 console.log(`\n${failures.length === 0 ? "PASS" : "FAIL"} — ${passed} checks passed, ${failures.length} failed`);
