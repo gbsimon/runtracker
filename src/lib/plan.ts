@@ -1,19 +1,30 @@
 import { eq, sql } from "drizzle-orm";
 import { type DbExecutor, getDb } from "@/db";
 import { plans } from "@/db/schema";
-import { type PlanChange, toPlanDays } from "./plan-change";
-import { applyTargetPace, generateDefaultPlan } from "./plan-generator";
+import { applyChangeToPlan, type PlanChange } from "./plan-change";
 import {
+	appendWeeks,
+	applyTargetPace,
+	generateDefaultPlan,
+	generateInitialOpenPlan,
+	generateOpenBlock,
+	planExtension,
+} from "./plan-generator";
+import {
+	isOpenMode,
 	normalizePlanSettings,
 	normalizePlanWeeks,
 	normalizeWorkoutMap,
+	OPEN_BLOCK_WEEKS,
 	type PlanDay,
 	type PlanSettings,
 	type PlanWeek,
 	type WorkoutMap,
 	workoutKey,
 } from "./plan-types";
-import { isISODate, weeksBetween, workoutDateISO } from "./running";
+import { listRuns, runLocalDateISO } from "./runs";
+import { addDaysISO, isISODate, mondayISO, todayISOInZone, weeksBetween, workoutDateISO } from "./running";
+import { weeklyLoad } from "./training-metrics";
 
 export type PlanRecord = {
 	settings: PlanSettings;
@@ -63,14 +74,126 @@ export async function savePlan(
 		.onConflictDoUpdate({ target: plans.userId, set: values });
 }
 
+/** Complete weeks an open-mode block is sized from. */
+const RECENT_LOAD_WEEKS = 4;
+
+/**
+ * Kilometres per complete week over the last few weeks, oldest first — the
+ * same Monday-anchored buckets the coach's WEEKLY VOLUME section uses. The
+ * week in progress is left out: three days into it, it would read as a dip.
+ */
+export async function recentWeeklyKm(userId: string, today: string, zone = "UTC"): Promise<number[]> {
+	const runs = await listRuns(userId);
+	const report = weeklyLoad(
+		runs.map((run) => ({
+			id: run.id,
+			day: runLocalDateISO(run, zone),
+			distanceM: run.distanceM,
+			durationS: run.durationS,
+			avgHr: run.avgHr,
+			maxHr: run.maxHr,
+		})),
+		RECENT_LOAD_WEEKS,
+		{ endDay: addDaysISO(mondayISO(today), -1) },
+	);
+	return report.weeks.map((week) => week.km);
+}
+
 /**
  * Builds the default plan for the given settings and clears completions —
- * v1's "Regenerate Plan", which also reset `completedWorkouts`.
+ * v1's "Regenerate Plan", which also reset `completedWorkouts`. An open-mode
+ * plan has no race to count down to, so it starts over as one block at the
+ * current calendar week, with empty "Off Plan" weeks before it when the start
+ * date is in the past. `today` places and sizes that block; it defaults to
+ * the UTC date.
  */
-export async function regeneratePlan(userId: string, settings: PlanSettings): Promise<PlanWeek[]> {
-	const weeks = generateDefaultPlan(weeksBetween(settings.startDate, settings.raceDate), settings);
+export async function regeneratePlan(userId: string, settings: PlanSettings, today?: string): Promise<PlanWeek[]> {
+	const day = today ?? todayISOInZone("UTC");
+	const weeks = isOpenMode(settings)
+		? generateInitialOpenPlan({
+				startDate: settings.startDate,
+				today: day,
+				recentWeeklyKm: await recentWeeklyKm(userId, day),
+				targetPace: settings.targetPace,
+			})
+		: generateDefaultPlan(weeksBetween(settings.startDate, settings.raceDate), settings);
 	await savePlan(userId, { settings, weeks });
 	return weeks;
+}
+
+/** What an AI block generator is handed; it returns the weeks, any numbering. */
+export type OpenBlockRequest = {
+	settings: PlanSettings;
+	weeks: PlanWeek[];
+	firstWeek: number;
+	count: number;
+	recentWeeklyKm: number[];
+	today: string;
+};
+
+export type ExtendResult = {
+	weeks: PlanWeek[];
+	added: PlanWeek[];
+	/** Empty "Off Plan" weeks inserted because the calendar had run past the plan. */
+	gapWeeks: number;
+	/** Set when the AI generator failed and the standard block was used instead. */
+	aiError: unknown;
+};
+
+/**
+ * Appends `count` weeks to the end of the plan and never rewrites one that is
+ * already there — completions, skips and edits all stay put. The AI generator
+ * is injected rather than imported so this data layer stays free of the
+ * Anthropic client; when it throws, the standard block goes in instead and
+ * the error is handed back for the caller to report.
+ */
+export async function extendPlan(
+	userId: string,
+	count = OPEN_BLOCK_WEEKS,
+	options: { ai?: (request: OpenBlockRequest) => Promise<PlanWeek[]>; today?: string; zone?: string } = {},
+): Promise<ExtendResult | null> {
+	const plan = await getPlan(userId);
+	if (!plan || !isISODate(plan.settings.startDate)) return null;
+
+	const zone = options.zone ?? "UTC";
+	const today = options.today ?? todayISOInZone(zone);
+	const size = Math.max(1, Math.floor(count));
+	const { gap, firstWeek } = planExtension(plan.weeks, plan.settings.startDate, today);
+	const recent = await recentWeeklyKm(userId, today, zone);
+
+	const standard = () =>
+		generateOpenBlock({ firstWeek, count: size, recentWeeklyKm: recent, targetPace: plan.settings.targetPace });
+
+	let block: PlanWeek[];
+	let aiError: unknown = null;
+	if (options.ai) {
+		try {
+			const generated = await options.ai({
+				settings: plan.settings,
+				weeks: plan.weeks,
+				firstWeek,
+				count: size,
+				recentWeeklyKm: recent,
+				today,
+			});
+			// Renumbered here whatever the model wrote, so the block always lands
+			// exactly where `planExtension` said it would.
+			block = generated.slice(0, size).map((week, i) => ({ ...week, week: firstWeek + i }));
+			if (block.length === 0) throw new Error("The AI returned an empty block");
+		} catch (error) {
+			aiError = error;
+			block = standard();
+		}
+	} else {
+		block = standard();
+	}
+
+	const weeks = appendWeeks(plan.weeks, gap, block);
+	// Weeks only: completions and skips are keyed by week number, and every
+	// existing number keeps its meaning, so neither map needs touching.
+	await getDb().update(plans).set({ weeks, updatedAt: new Date() }).where(eq(plans.userId, userId));
+
+	return { weeks, added: block, gapWeeks: gap.length, aiError };
 }
 
 /**
@@ -198,37 +321,10 @@ export async function applyPlanChange(userId: string, change: PlanChange): Promi
 	const plan = await getPlan(userId);
 	if (!plan) return false;
 
-	let weeks = plan.weeks;
-	const completed = { ...plan.completed };
-	const skipped = { ...plan.skipped };
-	let touched = false;
+	const next = applyChangeToPlan(plan, change);
+	if (!next) return false;
 
-	for (const entry of change.changes) {
-		const index = weeks.findIndex((week) => week.week === entry.week);
-		if (index === -1) continue;
-		touched = true;
-
-		if (entry.days) {
-			const days = toPlanDays(entry.days);
-			weeks = weeks.map((week, i) => (i === index ? { ...week, days } : week));
-		}
-
-		for (const skip of entry.skips ?? []) {
-			const dayIdx = weeks[index].days.findIndex((day) => day.day === skip.day);
-			if (dayIdx === -1) continue;
-			const key = workoutKey(entry.week, dayIdx);
-			if (skip.skipped) {
-				skipped[key] = true;
-				delete completed[key];
-			} else {
-				delete skipped[key];
-			}
-		}
-	}
-
-	if (!touched) return false;
-
-	await savePlan(userId, { settings: plan.settings, weeks, completed, skipped });
+	await savePlan(userId, next);
 	return true;
 }
 

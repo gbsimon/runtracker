@@ -3,9 +3,10 @@ import { COACH_REQUEST_DEFAULTS, getAnthropic } from "./anthropic";
 import { recoverySummary } from "./coach-context";
 import { withCoachModel } from "./coach-model";
 import { getDailyMetrics } from "./daily-metrics";
+import type { OpenBlockRequest } from "./plan";
 import { normalizePlanDay, type PlanDay, type PlanSettings, type PlanWeek, raceLabel } from "./plan-types";
 import { listRuns, runDistanceKm } from "./runs";
-import { formatDuration, formatKm, paceSeconds } from "./running";
+import { formatDuration, formatKm, isISODate, paceSeconds } from "./running";
 
 /**
  * Port of v1's `generateAIPlan()`. Kept out of the `"use server"` action file
@@ -137,6 +138,116 @@ export async function generateAIPlanWeeks(
 	}
 
 	const weeks = normalizeWeeks(parsed);
+	if (weeks.length === 0 || weeks.every((week) => week.days.length === 0)) {
+		throw new Error("The AI returned an empty plan");
+	}
+
+	return weeks;
+}
+
+// ---------------------------------------------------------------------------
+// Open mode — the next block of a rolling plan
+// ---------------------------------------------------------------------------
+
+/** A few weeks of the existing plan is enough for the model to continue it. */
+const PLAN_TAIL_WEEKS = 4;
+
+function openBlockSystemPrompt(request: OpenBlockRequest): string {
+	const { firstWeek, count, settings } = request;
+	const lastWeek = firstWeek + count - 1;
+	const paceRule = settings.targetPace
+		? `\n- The runner's reference pace is ${settings.targetPace} min/km. Include a "pace" field (string, format "M:SS" e.g. "6:00") for each workout with the suggested pace. Easy runs ~60-90s slower than that pace, long runs ~45-75s slower, tempo ~10s slower, intervals ~20s faster.`
+		: "";
+
+	return `You are an expert running coach. Output ONLY a valid JSON array, no other text, no markdown.
+
+The runner is in open-ended training: there is no target race. Write the NEXT ${count} weeks of their rolling plan, continuing from where the current plan ends. The array has EXACTLY ${count} entries, numbered ${firstWeek} to ${lastWeek}.
+
+Each entry: {"week": <${firstWeek}-${lastWeek}>, "phase": "<phase>", "days": [{"day": "<Day>", "type": "<type>", "distance": <km>, "notes": "<note>"}]}
+
+RULES:
+- Day values MUST be: Mon, Tue, Wed, Thu, Fri, Sat, or Sun
+- Do NOT include any calendar dates — only day-of-week abbreviations
+- Phase names: "Recovery", "Progression", "Recovery Week", "Maintenance"
+- Workout types: "Easy Run", "Long Run", "Tempo Run", "Intervals", "Race Pace", "Shakeout", "Rest"
+- No race day and no taper — this block builds fitness toward the runner's objective
+- In each run of 4 weeks, build for 3 weeks and make the 4th lighter ("Recovery Week")
+- Size week 1 from the runner's recent actual weekly volume, then grow no more than ~10% a week
+- If the runner raced in the last two weeks, start with an easy "Recovery" week
+- 3-4 runs a week unless the objective or the runner's history says otherwise
+- Distances in km, numbers only (no units in the value)${paceRule}`;
+}
+
+function planTail(weeks: PlanWeek[]): string {
+	const tail = weeks.slice(-PLAN_TAIL_WEEKS);
+	if (tail.length === 0) return "";
+	return `\nLast weeks of the current plan:\n${tail
+		.map(
+			(week) =>
+				`Week ${week.week} (${week.phase}): ${
+					week.days.length === 0
+						? "nothing planned"
+						: week.days.map((day) => `${day.day} ${day.type} ${day.distance}km`).join(", ")
+				}`,
+		)
+		.join("\n")}`;
+}
+
+/**
+ * The AI branch of an open-mode extension. Same budget gate, same model
+ * fallback and same tolerant parsing as `generateAIPlanWeeks`; the race-mode
+ * prompt above is left exactly as it was. Throws on any failure so
+ * `extendPlan` can drop back to the standard block.
+ */
+export async function generateAIOpenBlock(userId: string, request: OpenBlockRequest): Promise<PlanWeek[]> {
+	const { settings, today } = request;
+	if (await isOverDailyLimit(userId, today)) throw new CoachBudgetError();
+
+	const objective = settings.goal ? `Objective: ${settings.goal}` : "Objective: not set yet — build general fitness.";
+	const lastRace = isISODate(settings.raceDate)
+		? `Last race: ${raceLabel(settings.raceDistance)} (${settings.raceDistance}km) on ${settings.raceDate}.`
+		: "";
+	const volume = request.recentWeeklyKm.length
+		? `Recent weekly volume, oldest first: ${request.recentWeeklyKm.map((km) => `${km.toFixed(1)}km`).join(", ")}.`
+		: "";
+
+	const content = `Write weeks ${request.firstWeek}-${request.firstWeek + request.count - 1} of an open-ended training plan. Today is ${today}.
+${objective}
+${lastRace}
+${volume}${planTail(request.weeks)}
+
+${await runnerContext(userId, today)}`;
+
+	const response = await withCoachModel((model) =>
+		getAnthropic().messages.create({
+			...COACH_REQUEST_DEFAULTS,
+			model,
+			max_tokens: MAX_TOKENS,
+			system: openBlockSystemPrompt(request),
+			messages: [{ role: "user", content }],
+		}),
+	);
+
+	await recordMessageUsage(userId, today, response.usage);
+
+	const text = response.content
+		.filter((block) => block.type === "text")
+		.map((block) => block.text)
+		.join("");
+
+	const match = text.match(/\[[\s\S]*\]/);
+	if (!match) throw new Error("Could not parse plan from AI response");
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(match[0]);
+	} catch {
+		throw new Error("Could not parse plan from AI response");
+	}
+
+	// Renumbered from the block's first week, so a model that counted from 1
+	// still lands in the right place.
+	const weeks = normalizeWeeks(parsed).map((week, i) => ({ ...week, week: request.firstWeek + i }));
 	if (weeks.length === 0 || weeks.every((week) => week.days.length === 0)) {
 		throw new Error("The AI returned an empty plan");
 	}

@@ -28,7 +28,11 @@ export async function CoachPanel({ userId }: { userId: string }) {
 				content: message.content,
 			}))}
 			olderCount={Math.max(0, total - messages.length)}
-			plan={plan ? { weeks: plan.weeks, skipped: plan.skipped } : null}
+			plan={
+				plan
+					? { weeks: plan.weeks, skipped: plan.skipped, goalMode: plan.settings.goalMode, goal: plan.settings.goal }
+					: null
+			}
 			sendKey={prefs.chatSendKey}
 			// Sniffed here rather than in the browser: the composer's hint would
 			// otherwise have to change wording after hydration.

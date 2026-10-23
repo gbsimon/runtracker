@@ -32,12 +32,27 @@ export type PlanWeek = {
 	days: PlanDay[];
 };
 
+/**
+ * `"race"` is the plan v1 always built: dated weeks counting down to race day.
+ * `"open"` is a rolling plan with no target race, extended a block at a time.
+ */
+export type GoalMode = "race" | "open";
+
 export type PlanSettings = {
 	startDate: string;
+	/** In open mode these two describe the *last* race, kept for the coach. */
 	raceDate: string;
 	raceDistance: number;
 	targetPace: string;
 	hidePastWeeks: boolean;
+	/**
+	 * Optional because rows and exports from before open mode don't carry
+	 * them. `normalizePlanSettings` always fills both, so a missing key only
+	 * ever means "race" and "".
+	 */
+	goalMode?: GoalMode;
+	/** The runner's free-text objective in open mode. */
+	goal?: string;
 };
 
 /** `"<week>-<dayIdx>"` → true, exactly as v1 stored it. */
@@ -53,6 +68,12 @@ export const RACE_PRESETS = [
 ] as const;
 
 export const MIN_PLAN_WEEKS = 4;
+
+/** Weeks an open-mode plan grows by at a time. */
+export const OPEN_BLOCK_WEEKS = 4;
+
+/** Long enough for "sub-25 5K by spring, 4 days a week, mind the left knee"; short enough for every prompt. */
+export const MAX_GOAL_LENGTH = 500;
 
 export function workoutKey(week: number, dayIdx: number): string {
 	return `${week}-${dayIdx}`;
@@ -71,7 +92,28 @@ export function raceLabel(distance: number): string {
 }
 
 export function planSettingsDefaults(): PlanSettings {
-	return { startDate: "", raceDate: "", raceDistance: DEFAULT_RACE_DISTANCE, targetPace: "", hidePastWeeks: true };
+	return {
+		startDate: "",
+		raceDate: "",
+		raceDistance: DEFAULT_RACE_DISTANCE,
+		targetPace: "",
+		hidePastWeeks: true,
+		goalMode: "race",
+		goal: "",
+	};
+}
+
+export function normalizeGoalMode(value: unknown): GoalMode {
+	return value === "open" ? "open" : "race";
+}
+
+export function normalizeGoal(value: unknown): string {
+	return typeof value === "string" ? value.trim().slice(0, MAX_GOAL_LENGTH).trim() : "";
+}
+
+/** Reads the optional key, so a settings object from before open mode is a race plan. */
+export function isOpenMode(settings: Pick<PlanSettings, "goalMode"> | null | undefined): boolean {
+	return settings?.goalMode === "open";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -93,6 +135,9 @@ export function normalizePlanSettings(raw: unknown): PlanSettings {
 		targetPace: asString(source.targetPace),
 		// Absent means hidden — v1 data saved before the toggle existed.
 		hidePastWeeks: source.hidePastWeeks !== false,
+		// Absent means race — everything saved before open mode existed.
+		goalMode: normalizeGoalMode(source.goalMode),
+		goal: normalizeGoal(source.goal),
 	};
 }
 
@@ -123,6 +168,17 @@ export function normalizePlanWeeks(raw: unknown): PlanWeek[] {
 			days: days.map(normalizePlanDay).filter((day): day is PlanDay => day !== null),
 		};
 	});
+}
+
+/**
+ * The order the plan list shows weeks in: the current week and everything
+ * after it first, ascending, then the past, most recent first — so the week
+ * you're in is always at the top and history reads backwards from it.
+ */
+export function orderWeeksForDisplay<T extends Pick<PlanWeek, "week">>(weeks: readonly T[], currentWeek: number): T[] {
+	const upcoming = weeks.filter((week) => week.week >= currentWeek).sort((a, b) => a.week - b.week);
+	const past = weeks.filter((week) => week.week < currentWeek).sort((a, b) => b.week - a.week);
+	return [...upcoming, ...past];
 }
 
 export function normalizeWorkoutMap(raw: unknown): WorkoutMap {

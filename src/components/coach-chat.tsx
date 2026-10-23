@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { type ChatSendKey, chatKeyAction, DEFAULT_CHAT_SEND_KEY, sendKeyHint } from "@/lib/chat-send-key";
 import { type CoachChatMessage, newestExchangesFirst } from "@/lib/chat-view";
 import { clearChatAction } from "@/lib/coach-actions";
+import { COACH_SEND_EVENT } from "@/lib/coach-kickoff";
 import { newestChangeMessageId, planChangesIn, type PlanSnapshot } from "@/lib/plan-change";
 import { CoachMessageBody } from "./coach-message";
 
@@ -18,6 +19,12 @@ const GREETING =
 	"Hey! I'm your running coach 🏃 I can see your training plan and logged runs. Ask me anything — pacing, recovery, race day strategy, or how you're feeling.\n\nI can also **adjust your plan** directly. If you're hurt, tired, or want more volume — just tell me and I'll suggest changes you can apply with one click.";
 
 const GREETING_MESSAGE: CoachChatMessage = { id: "greeting", role: "assistant", content: GREETING };
+
+/** The same greeting for a plan with no race on the calendar. */
+const OPEN_GREETING =
+	"Hey! I'm your running coach 🏃 I can see your training plan and logged runs. There's no race on the calendar, so tell me what you want next — getting faster, building volume, or just staying consistent — and I'll shape the next block around it.\n\nI can also **adjust your plan** directly. If you're hurt, tired, or want more volume — just tell me and I'll suggest changes you can apply with one click.";
+
+const OPEN_GREETING_MESSAGE: CoachChatMessage = { id: "greeting", role: "assistant", content: OPEN_GREETING };
 
 type StreamEvent = { type: "text"; text: string } | { type: "error"; message: string } | { type: "done" };
 
@@ -67,9 +74,10 @@ export function CoachChat({
 	const streamingHasChange = useMemo(() => (streamed ? planChangesIn(streamed).length > 0 : false), [streamed]);
 	const liveChangeId = streamingHasChange ? null : committedNewestId;
 
+	const greeting = plan?.goalMode === "open" ? OPEN_GREETING_MESSAGE : GREETING_MESSAGE;
 	const newestFirst = useMemo(
-		() => newestExchangesFirst(messages.length > 0 ? messages : [GREETING_MESSAGE]),
-		[messages],
+		() => newestExchangesFirst(messages.length > 0 ? messages : [greeting]),
+		[messages, greeting],
 	);
 
 	/**
@@ -144,6 +152,28 @@ export function CoachChat({
 		setStreamed(null);
 		setSending(false);
 	}
+
+	// A kickoff from elsewhere on the page (see `coach-kickoff.ts`). The latest
+	// `send` is read through a ref so the listener is attached exactly once.
+	const kickoffRef = useRef<(text: string) => void>(() => {});
+	useEffect(() => {
+		kickoffRef.current = (text) => {
+			// Mid-reply: leave it in the composer rather than talk over the coach.
+			if (sending) {
+				if (inputRef.current) inputRef.current.value = text;
+				return;
+			}
+			void send(text);
+		};
+	});
+	useEffect(() => {
+		const onKickoff = (event: Event) => {
+			const text = (event as CustomEvent<unknown>).detail;
+			if (typeof text === "string" && text.trim()) kickoffRef.current(text.trim());
+		};
+		window.addEventListener(COACH_SEND_EVENT, onKickoff);
+		return () => window.removeEventListener(COACH_SEND_EVENT, onKickoff);
+	}, []);
 
 	function onSubmit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();

@@ -7,7 +7,18 @@
  * The write half lives in `plan.ts` with the rest of the data layer.
  */
 
-import { type DayAbbr, DAY_ABBRS, isDayAbbr, type PlanDay, type PlanWeek, type WorkoutMap, workoutKey } from "./plan-types";
+import {
+	type DayAbbr,
+	DAY_ABBRS,
+	type GoalMode,
+	isDayAbbr,
+	normalizeGoal,
+	type PlanDay,
+	type PlanSettings,
+	type PlanWeek,
+	type WorkoutMap,
+	workoutKey,
+} from "./plan-types";
 
 export type PlanChangeDay = {
 	day: DayAbbr;
@@ -23,12 +34,25 @@ export type PlanChangeEntry = {
 	week: number;
 	days?: PlanChangeDay[];
 	skips?: PlanChangeSkip[];
+	/**
+	 * Only read when the entry appends a week past the end of the plan; an
+	 * existing week keeps its phase, exactly as before this field existed.
+	 */
+	phase?: string;
 };
 
-export type PlanChange = { changes: PlanChangeEntry[]; summary: string };
+/**
+ * `goal` is additive: it is only set when the block carried one, so a block
+ * written before open mode parses — and keys — exactly as it always did.
+ */
+export type PlanChange = { changes: PlanChangeEntry[]; summary: string; goal?: { text: string } };
 
-/** Only the parts of a plan the protocol reads — keeps this module DB-free. */
-export type PlanSnapshot = { weeks: PlanWeek[]; skipped: WorkoutMap };
+/**
+ * Only the parts of a plan the protocol reads — keeps this module DB-free.
+ * The goal fields are optional so a snapshot without them still works; it
+ * simply never reports a goal as applied.
+ */
+export type PlanSnapshot = { weeks: PlanWeek[]; skipped: WorkoutMap; goalMode?: GoalMode; goal?: string };
 
 export type MessageSegment =
 	| { kind: "text"; text: string; truncated: boolean }
@@ -116,7 +140,21 @@ export function parsePlanChange(raw: string): PlanChange | null {
 	}
 
 	const source = asRecord(data);
-	if (!source || !Array.isArray(source.changes) || source.changes.length === 0) return null;
+	if (!source || !Array.isArray(source.changes)) return null;
+
+	// An optional objective. Malformed is rejected like any other bad field
+	// rather than silently dropped, so the runner never applies half a block.
+	let goal: { text: string } | null = null;
+	if (source.goal !== undefined && source.goal !== null) {
+		const raw = asRecord(source.goal);
+		const text = normalizeGoal(typeof source.goal === "string" ? source.goal : raw?.text);
+		if (!text) return null;
+		goal = { text };
+	}
+
+	// v1's rule — a block has to change something — with an objective now
+	// counting as something.
+	if (source.changes.length === 0 && !goal) return null;
 
 	const changes: PlanChangeEntry[] = [];
 	for (const raw of source.changes) {
@@ -143,10 +181,30 @@ export function parsePlanChange(raw: string): PlanChange | null {
 		}
 
 		if (!result.days && !result.skips) return null;
+		if (typeof entry.phase === "string" && entry.phase.trim()) result.phase = entry.phase.trim();
 		changes.push(result);
 	}
 
-	return { changes, summary: typeof source.summary === "string" ? source.summary : "" };
+	const change: PlanChange = { changes, summary: typeof source.summary === "string" ? source.summary : "" };
+	if (goal) change.goal = goal;
+	return change;
+}
+
+/**
+ * Week numbers a change adds to the end of the plan: entries past the last
+ * week that carry a `phase` and `days`, contiguous from the week after it.
+ * Anything past a hole is not appended — it stays what it always was, a week
+ * that isn't in the plan — so a stale block still reports itself as stale.
+ */
+export function appendedWeeks(weeks: readonly Pick<PlanWeek, "week">[], change: PlanChange): number[] {
+	const last = weeks.reduce((max, week) => Math.max(max, week.week), 0);
+	const candidates = new Set(
+		change.changes.filter((entry) => entry.week > last && entry.phase && entry.days).map((entry) => entry.week),
+	);
+
+	const result: number[] = [];
+	for (let week = last + 1; candidates.has(week); week++) result.push(week);
+	return result;
 }
 
 /**
@@ -219,6 +277,11 @@ export function newestChangeMessageId(messages: readonly ThreadMessage[]): strin
 export function isPlanChangeApplied(plan: PlanSnapshot | null, change: PlanChange): boolean {
 	if (!plan) return false;
 
+	// An objective is applied once the plan is open-ended and carries it. An
+	// appended week needs no special case: once added it is a week like any
+	// other, and the per-week comparison below finds it.
+	if (change.goal && !(plan.goalMode === "open" && (plan.goal ?? "") === change.goal.text)) return false;
+
 	return change.changes.every((entry) => {
 		const week = plan.weeks.find((candidate) => candidate.week === entry.week);
 		if (!week) return false;
@@ -249,6 +312,62 @@ export function isPlanChangeApplied(plan: PlanSnapshot | null, change: PlanChang
 	});
 }
 
+/** The parts of a stored plan a change rewrites. */
+export type PlanState = { settings: PlanSettings; weeks: PlanWeek[]; completed: WorkoutMap; skipped: WorkoutMap };
+
+/**
+ * The write half of `applyPlanChange`, minus the database: returns the plan as
+ * it stands after the change, or `null` when nothing in it matched — the
+ * "those weeks aren't in your plan any more" case. Never mutates `plan`.
+ */
+export function applyChangeToPlan(plan: PlanState, change: PlanChange): PlanState | null {
+	let weeks = plan.weeks;
+	let settings = plan.settings;
+	const completed = { ...plan.completed };
+	const skipped = { ...plan.skipped };
+	let touched = false;
+
+	// Open mode: weeks past the end are added first, in order, so the loop
+	// below finds them like any other week and applies their skips the same
+	// way. Nothing here runs for a block that only edits existing weeks.
+	for (const number of appendedWeeks(weeks, change)) {
+		const entry = change.changes.find((candidate) => candidate.week === number);
+		if (!entry?.days || !entry.phase) continue;
+		weeks = [...weeks, { week: number, phase: entry.phase, days: toPlanDays(entry.days) }];
+	}
+
+	if (change.goal) {
+		settings = { ...settings, goalMode: "open", goal: normalizeGoal(change.goal.text) };
+		touched = true;
+	}
+
+	for (const entry of change.changes) {
+		const index = weeks.findIndex((week) => week.week === entry.week);
+		if (index === -1) continue;
+		touched = true;
+
+		if (entry.days) {
+			const days = toPlanDays(entry.days);
+			weeks = weeks.map((week, i) => (i === index ? { ...week, days } : week));
+		}
+
+		for (const skip of entry.skips ?? []) {
+			const dayIdx = weeks[index].days.findIndex((day) => day.day === skip.day);
+			if (dayIdx === -1) continue;
+			const key = workoutKey(entry.week, dayIdx);
+			if (skip.skipped) {
+				skipped[key] = true;
+				delete completed[key];
+			} else {
+				delete skipped[key];
+			}
+		}
+	}
+
+	if (!touched) return null;
+	return { settings, weeks, completed, skipped };
+}
+
 /** Days a change writes into a week, in the plan's own shape. */
 export function toPlanDays(days: PlanChangeDay[]): PlanDay[] {
 	return days.map((day) => {
@@ -256,6 +375,14 @@ export function toPlanDays(days: PlanChangeDay[]): PlanDay[] {
 		if (day.pace) result.pace = day.pace;
 		return result;
 	});
+}
+
+/** The card / toast label for a change that may carry an objective, weeks, or both. */
+export function planChangeLabel(change: PlanChange): string {
+	const plural = change.changes.length > 1 ? "s" : "";
+	const weeks = change.changes.length > 0 ? `Week${plural} ${planChangeWeeks(change)}` : "";
+	if (!change.goal) return weeks;
+	return weeks ? `Objective · ${weeks}` : "Objective";
 }
 
 export function planChangeWeeks(change: PlanChange): string {

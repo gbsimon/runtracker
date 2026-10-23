@@ -1,5 +1,5 @@
-import { MIN_PLAN_WEEKS, type PlanDay, type PlanSettings, type PlanWeek, raceLabel } from "./plan-types";
-import { formatPace, getWorkoutPace, parsePace } from "./running";
+import { MIN_PLAN_WEEKS, OPEN_BLOCK_WEEKS, type PlanDay, type PlanSettings, type PlanWeek, raceLabel } from "./plan-types";
+import { formatPace, getWorkoutPace, parsePace, planWeekOfISO } from "./running";
 
 /**
  * Port of v1's `generateDefaultPlan()` — same phase allocation, same distance
@@ -134,6 +134,196 @@ export function generateDefaultPlan(
 	});
 
 	return applyTargetPace(plan, settings.targetPace);
+}
+
+// ---------------------------------------------------------------------------
+// Open mode — a rolling plan with no race at the end of it
+// ---------------------------------------------------------------------------
+
+export const OPEN_PHASES = {
+	progression: "Progression",
+	recovery: "Recovery Week",
+	/** Calendar weeks that passed with no plan, filled so numbering stays contiguous. */
+	gap: "Off Plan",
+} as const;
+
+/** Where the next block starts when nobody has run for a while. */
+const FALLBACK_WEEKLY_KM = 15;
+const MIN_WEEKLY_KM = 8;
+const MAX_WEEKLY_KM = 90;
+/** Base weekly km below which a fourth run is more fatigue than fitness. */
+const FOUR_RUN_KM = 25;
+/** Three steps up, one back down — the lighter week is where the build lands. */
+const BLOCK_FACTORS = [0.85, 0.95, 1.05, 0.7];
+const MAX_LONG_RUN_KM = 24;
+const MIN_RUN_KM = 2;
+
+/**
+ * The weekly volume a new block is sized from: the mean of the recent
+ * complete weeks, zeros included — two weeks off after a race *should* pull the
+ * next block down.
+ */
+export function baselineWeeklyKm(recentWeeklyKm: readonly number[]): number {
+	const weeks = recentWeeklyKm.filter((km) => Number.isFinite(km) && km >= 0);
+	if (weeks.length === 0) return FALLBACK_WEEKLY_KM;
+	const mean = weeks.reduce((sum, km) => sum + km, 0) / weeks.length;
+	if (mean <= 0) return FALLBACK_WEEKLY_KM;
+	return Math.min(MAX_WEEKLY_KM, Math.max(MIN_WEEKLY_KM, mean));
+}
+
+/** Half-kilometre steps, so a plan reads "6.5 km" rather than "6.37 km". */
+function half(km: number): number {
+	return Math.max(MIN_RUN_KM, Math.round(km * 2) / 2);
+}
+
+/**
+ * The deterministic open-mode block: per four weeks, three that build and one
+ * lighter, sized from what the runner has actually been running. No race day
+ * — the plan just keeps going, and the next block picks up from wherever this
+ * one leaves the runner's real mileage.
+ */
+export function generateOpenBlock({
+	firstWeek,
+	count = OPEN_BLOCK_WEEKS,
+	recentWeeklyKm,
+	targetPace,
+}: {
+	firstWeek: number;
+	count?: number;
+	recentWeeklyKm: readonly number[];
+	targetPace: string;
+}): PlanWeek[] {
+	const base = baselineWeeklyKm(recentWeeklyKm);
+	// Decided once per block from the base, so the weekly pattern doesn't flip
+	// halfway through as the volume crosses the line.
+	const fourRuns = base >= FOUR_RUN_KM;
+	const plan: PlanWeek[] = [];
+
+	for (let i = 0; i < Math.max(0, Math.floor(count)); i++) {
+		const week = firstWeek + i;
+		const position = i % BLOCK_FACTORS.length;
+		const total = base * BLOCK_FACTORS[position];
+		const lighter = position === BLOCK_FACTORS.length - 1;
+		// The block opens with no hard session — after a race, or after the last
+		// block's lighter week, the first week back is strides only — then
+		// intervals, then tempo.
+		const easyOpener = position === 0;
+		const isInterval = position % 2 === 1;
+
+		if (lighter) {
+			const long = half(Math.min(MAX_LONG_RUN_KM, total * 0.4));
+			const easy = half((total - long) / 2);
+			plan.push({
+				week,
+				phase: OPEN_PHASES.recovery,
+				days: [
+					{ day: "Tue", type: "Easy Run", distance: easy, notes: "Lighter week — let the last three weeks sink in" },
+					{ day: "Thu", type: "Easy Run", distance: easy, notes: "Relaxed, finish with a few strides" },
+					{ day: "Sun", type: "Long Run", distance: long, notes: "Shorter long run, fully conversational" },
+				],
+			});
+			continue;
+		}
+
+		if (!fourRuns) {
+			const long = half(Math.min(MAX_LONG_RUN_KM, total * 0.42));
+			const easy = half((total - long) / 2);
+			plan.push({
+				week,
+				phase: OPEN_PHASES.progression,
+				days: [
+					{ day: "Tue", type: "Easy Run", distance: easy, notes: "Comfortable pace, conversational" },
+					easyOpener
+						? { day: "Thu", type: "Easy Run", distance: easy, notes: "Easy, add 4×20s strides at the end" }
+						: {
+								day: "Thu",
+								type: isInterval ? "Intervals" : "Tempo Run",
+								distance: easy,
+								notes: isInterval
+									? `${4 + position}×400m quick with 200m jog recovery`
+									: `10 min warm-up, ${10 + position * 5} min tempo, 10 min cool-down`,
+							},
+					{ day: "Sun", type: "Long Run", distance: long, notes: "Steady and easy, build endurance" },
+				],
+			});
+			continue;
+		}
+
+		const long = half(Math.min(MAX_LONG_RUN_KM, total * 0.36));
+		const quality = half(total * 0.22);
+		const easy = half((total - long - quality) / 2);
+		plan.push({
+			week,
+			phase: OPEN_PHASES.progression,
+			days: [
+				{ day: "Tue", type: "Easy Run", distance: easy, notes: "Comfortable pace" },
+				easyOpener
+					? { day: "Wed", type: "Easy Run", distance: quality, notes: "Easy, add 6×20s strides at the end" }
+					: {
+							day: "Wed",
+							type: isInterval ? "Intervals" : "Tempo Run",
+							distance: quality,
+							notes: isInterval
+								? `${4 + position}×800m fast with 400m jog recovery`
+								: `10 min warm-up, ${15 + position * 5} min tempo, 10 min cool-down`,
+						},
+				{ day: "Fri", type: "Easy Run", distance: easy, notes: "Recovery pace" },
+				{ day: "Sun", type: "Long Run", distance: long, notes: "Steady, controlled effort" },
+			],
+		});
+	}
+
+	return applyTargetPace(plan, targetPace);
+}
+
+/**
+ * Where an extension lands. New weeks normally start straight after the last
+ * one; when the calendar has run past the plan, the weeks in between become
+ * empty "Off Plan" weeks so week numbers stay contiguous (every workout key
+ * and date in the app is derived from the number) and the block starts at the
+ * week the runner is actually in. Existing weeks are never touched.
+ */
+export function planExtension(
+	weeks: readonly Pick<PlanWeek, "week">[],
+	startDate: string,
+	today: string,
+): { gap: PlanWeek[]; firstWeek: number } {
+	const last = weeks.reduce((max, week) => Math.max(max, week.week), 0);
+	const calendarWeek = planWeekOfISO(startDate, today) ?? last + 1;
+
+	const gap: PlanWeek[] = [];
+	if (calendarWeek > last + 1) {
+		for (let week = last + 1; week < calendarWeek; week++) gap.push({ week, phase: OPEN_PHASES.gap, days: [] });
+	}
+	return { gap, firstWeek: last + 1 + gap.length };
+}
+
+/**
+ * A fresh open-mode plan: placed the way `planExtension` places a block on an
+ * empty plan, so a start date in the past gives "Off Plan" weeks up to the
+ * current calendar week and the block starts there — never in the past. A
+ * start date this week or later gives a block from week 1.
+ */
+export function generateInitialOpenPlan({
+	startDate,
+	today,
+	count = OPEN_BLOCK_WEEKS,
+	recentWeeklyKm,
+	targetPace,
+}: {
+	startDate: string;
+	today: string;
+	count?: number;
+	recentWeeklyKm: readonly number[];
+	targetPace: string;
+}): PlanWeek[] {
+	const { gap, firstWeek } = planExtension([], startDate, today);
+	return appendWeeks([], gap, generateOpenBlock({ firstWeek, count, recentWeeklyKm, targetPace }));
+}
+
+/** Existing weeks untouched, then the gap, then the new block. */
+export function appendWeeks(weeks: readonly PlanWeek[], gap: readonly PlanWeek[], block: readonly PlanWeek[]): PlanWeek[] {
+	return [...weeks, ...gap, ...block];
 }
 
 /**

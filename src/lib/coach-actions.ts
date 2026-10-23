@@ -8,6 +8,7 @@ import {
 	newestChangeMessageId,
 	parsePlanChange,
 	planChangeKey,
+	planChangeLabel,
 	planChangesIn,
 	planChangeWeeks,
 } from "@/lib/plan-change";
@@ -58,6 +59,8 @@ export async function applyPlanChangeAction(raw: string): Promise<CoachActionSta
 	// The coach panel lives in the root layout now, so it has to be
 	// invalidated everywhere rather than on `/coach` alone.
 	revalidatePath("/", "layout");
+
+	if (change.goal) return { status: "applied", message: `Plan updated — ${planChangeLabel(change)}` };
 
 	const plural = change.changes.length > 1 ? "s" : "";
 	return { status: "applied", message: `Plan updated — Week${plural} ${planChangeWeeks(change)}` };

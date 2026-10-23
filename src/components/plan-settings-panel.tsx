@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { type PlanFormState, savePlanSettingsAction } from "@/lib/plan-actions";
-import type { PlanSettings } from "@/lib/plan-types";
+import { type GoalMode, normalizeGoalMode, type PlanSettings } from "@/lib/plan-types";
 import { weeksBetween } from "@/lib/running";
 import { PlanFields } from "./plan-fields";
 import { SubmitButton } from "./submit-button";
@@ -10,6 +10,8 @@ import { SubmitButton } from "./submit-button";
 export function PlanSettingsPanel({ settings, weekCount }: { settings: PlanSettings; weekCount: number }) {
 	const [state, formAction] = useActionState<PlanFormState, FormData>(savePlanSettingsAction, { status: "idle" });
 	const scheduledWeeks = weeksBetween(settings.startDate, settings.raceDate);
+	// An open-ended plan has no race to span, so the mismatch below can't apply.
+	const [mode, setMode] = useState<GoalMode>(normalizeGoalMode(settings.goalMode));
 
 	return (
 		<details className="card group p-0">
@@ -20,10 +22,10 @@ export function PlanSettingsPanel({ settings, weekCount }: { settings: PlanSetti
 			</summary>
 
 			<form action={formAction} className="space-y-4 border-t border-white/5 px-4 py-4">
-				<PlanFields settings={settings} />
+				<PlanFields settings={settings} onModeChange={setMode} />
 				<input type="hidden" name="hidePastWeeks" value={settings.hidePastWeeks ? "1" : "0"} />
 
-				{scheduledWeeks !== weekCount ? (
+				{mode === "race" && scheduledWeeks !== weekCount ? (
 					<p className="text-xs text-amber-400">
 						Your dates now span {scheduledWeeks} weeks but the plan has {weekCount}. Regenerate to rebuild it.
 					</p>
@@ -46,7 +48,11 @@ export function PlanSettingsPanel({ settings, weekCount }: { settings: PlanSetti
 						value="regenerate"
 						pendingLabel="Regenerating…"
 						onClick={(event) => {
-							if (!confirm("Regenerate the plan? This clears completed and skipped workouts.")) {
+							const message =
+								mode === "open"
+									? "Regenerate the plan? This replaces every week with a fresh 4-week block starting this week (earlier weeks become empty) and clears completed and skipped workouts."
+									: "Regenerate the plan? This clears completed and skipped workouts.";
+							if (!confirm(message)) {
 								event.preventDefault();
 							}
 						}}

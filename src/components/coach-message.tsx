@@ -7,7 +7,7 @@ import {
 	isPlanChangeApplied,
 	type PlanChange,
 	type PlanSnapshot,
-	planChangeWeeks,
+	planChangeLabel,
 	splitMessage,
 } from "@/lib/plan-change";
 
@@ -107,11 +107,17 @@ function PlanChangeCard({
 						applied ? "text-brand-400" : superseded ? "text-gray-500" : "text-amber-400"
 					}`}
 				>
-					Plan Change — Week{change.changes.length > 1 ? "s" : ""} {planChangeWeeks(change)}
+					Plan Change — {planChangeLabel(change)}
 				</span>
 			</div>
 
 			{change.summary ? <p className="mb-2 text-xs text-gray-400">{change.summary}</p> : null}
+
+			{change.goal ? (
+				<p className="mb-2 text-xs text-gray-400">
+					<strong className="text-gray-300">Objective:</strong> {change.goal.text}
+				</p>
+			) : null}
 
 			<div className="mb-2 space-y-1 text-xs text-gray-500">
 				{changeSummary(change).map((entry) => (

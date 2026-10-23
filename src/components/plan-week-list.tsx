@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { isWeekFinished, type PlanRecord } from "@/lib/plan";
 import { toggleSkipAction, toggleWorkoutAction } from "@/lib/plan-actions";
-import { type PlanDay, workoutKey } from "@/lib/plan-types";
+import { orderWeeksForDisplay, type PlanDay, workoutKey } from "@/lib/plan-types";
 import { type RunRecord, runDistanceKm, runLocalDateISO } from "@/lib/runs";
 import {
 	addDaysISO,
@@ -26,6 +26,12 @@ const PHASE_COLORS: Record<string, string> = {
 	Taper: "bg-amber-500/15 text-amber-400 border border-amber-500/20",
 	"Race Week Prep": "bg-rose-500/15 text-rose-400 border border-rose-500/20",
 	"Race Week!": "bg-rose-500/15 text-rose-400 border border-rose-500/20",
+	// Open mode's rolling blocks.
+	Recovery: "bg-sky-500/15 text-sky-400 border border-sky-500/20",
+	Progression: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20",
+	"Recovery Week": "bg-sky-500/15 text-sky-400 border border-sky-500/20",
+	Maintenance: "bg-teal-500/15 text-teal-400 border border-teal-500/20",
+	"Off Plan": "bg-white/5 text-gray-500 border border-white/10",
 };
 
 const TYPE_COLORS: Record<string, string> = {
@@ -75,7 +81,9 @@ export function PlanWeekList({
 		runsByDate.set(date, [...(runsByDate.get(date) ?? []), run]);
 	}
 
-	const visible = plan.weeks.filter((week) => {
+	// Current and upcoming weeks first, then the past newest-first; the
+	// hide-past filter is the same one as ever, just applied to that order.
+	const visible = orderWeeksForDisplay(plan.weeks, currentWeek).filter((week) => {
 		if (!hidePastWeeks || week.week === currentWeek) return true;
 		return addDaysISO(weekMondayISO(startDate, week.week), 6) >= today;
 	});
@@ -92,7 +100,8 @@ export function PlanWeekList({
 				const completedDays = week.days.filter((_, i) => plan.completed[workoutKey(week.week, i)]);
 				const weekCompleted = week.days.length > 0 && completedDays.length === week.days.length;
 				const skippedCount = week.days.filter((_, i) => plan.skipped[workoutKey(week.week, i)]).length;
-				const weekFinished = !weekCompleted && isWeekFinished(plan, week);
+				// A week with nothing planned (an "Off Plan" gap) has nothing to finish.
+				const weekFinished = !weekCompleted && week.days.length > 0 && isWeekFinished(plan, week);
 				const weekTotal = week.days.reduce(
 					(sum, day, i) => sum + (plan.skipped[workoutKey(week.week, i)] ? 0 : day.distance),
 					0,
@@ -103,7 +112,7 @@ export function PlanWeekList({
 						key={week.week}
 						open={isCurrent}
 						className={`card group overflow-hidden ${isCurrent ? "week-current" : ""} ${
-							isPast && (weekCompleted || weekFinished) ? "opacity-40" : ""
+							isPast && (weekCompleted || weekFinished || week.days.length === 0) ? "opacity-40" : ""
 						}`}
 					>
 						<summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 text-left transition hover:bg-white/5">
@@ -136,6 +145,9 @@ export function PlanWeekList({
 						</summary>
 
 						<div className="space-y-1 px-4 pb-3">
+							{week.days.length === 0 ? (
+								<p className="border-t border-white/5 py-2 text-xs text-gray-500">Nothing planned this week.</p>
+							) : null}
 							{week.days.map((day, dayIdx) => {
 								const key = workoutKey(week.week, dayIdx);
 								const done = Boolean(plan.completed[key]);

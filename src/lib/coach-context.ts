@@ -1,7 +1,7 @@
 import { type DailyMetricsView, formatHours, getDailyMetrics } from "./daily-metrics";
 import type { HeartRateSample, RoutePoint, Split } from "./ingest/hae";
 import { getPlan, type PlanRecord } from "./plan";
-import { raceLabel, workoutKey } from "./plan-types";
+import { isOpenMode, type PlanSettings, raceLabel, workoutKey } from "./plan-types";
 import { enrichSplits } from "./run-detail";
 import { loadRunStreams } from "./run-streams";
 import { energyKcal, readRunMetrics } from "./run-metrics";
@@ -420,7 +420,9 @@ export function buildCoachContext({ plan, runs, today, recent, weekly, recovery,
 	const totalKm = runs.reduce((sum, run) => sum + run.distanceKm, 0);
 
 	let ctx = `TODAY: ${today} (${formatWeekdayLong(today)}). All dates in this context are ISO YYYY-MM-DD. "Last week" = before ${today}, "next week" = after ${today}.\n`;
-	ctx += `RUNNER PROFILE: Beginner runner training for a ${raceLabel(raceDistance)} (${raceDistance}km) on ${raceDate}.${paceInfo}\n`;
+	ctx += isOpenMode(settings)
+		? `${openRunnerProfile(settings)}\n`
+		: `RUNNER PROFILE: Beginner runner training for a ${raceLabel(raceDistance)} (${raceDistance}km) on ${raceDate}.${paceInfo}\n`;
 	ctx += hasPlan
 		? `PLAN: ${weeks.length} weeks total. CURRENT STATUS: Week ${currentWeek} of ${weeks.length}. ${completedThisWeek}/${totalThisWeek} workouts completed this week.\n`
 		: `PLAN: none set up yet — the runner has not generated a training plan.\n`;
@@ -481,6 +483,81 @@ export function buildCoachContext({ plan, runs, today, recent, weekly, recovery,
 	return ctx;
 }
 
+/** Long enough to carry the objective, short enough to keep the profile one line. */
+const PROFILE_GOAL_CHARS = 300;
+
+/**
+ * Open mode's RUNNER PROFILE line. The race fields are the race the runner
+ * already ran; an unset objective is spelled out so the coach knows to ask.
+ */
+export function openRunnerProfile(settings: PlanSettings | undefined): string {
+	// The sentence ends with its own full stop.
+	const goal = (settings?.goal ?? "").trim().replace(/[.\s]+$/, "");
+	const objective = goal
+		? goal.length > PROFILE_GOAL_CHARS
+			? `${goal.slice(0, PROFILE_GOAL_CHARS).trimEnd()}…`
+			: goal
+		: "not set yet";
+	const distance = settings?.raceDistance ?? 21.1;
+	const lastRace = isISODate(settings?.raceDate)
+		? ` Last race: ${raceLabel(distance)} (${distance}km) on ${settings?.raceDate}.`
+		: "";
+	const pace = settings?.targetPace ? ` Target pace: ${settings.targetPace} min/km.` : "";
+	return `RUNNER PROFILE: Runner in open-ended training (no target race). Objective: ${objective}.${lastRace}${pace}`;
+}
+
+/**
+ * Open mode's additions to the plan-change protocol. Appended after the v1
+ * protocol rather than woven into it, so race mode's prompt is untouched and
+ * the byte-for-byte check against v1 still holds.
+ */
+export function openModeProtocol(data: CoachData): string {
+	const settings = data.plan?.settings;
+	if (!isOpenMode(settings)) return "";
+
+	const weeks = data.plan?.weeks ?? [];
+	const last = weeks.reduce((max, week) => Math.max(max, week.week), 0);
+	const next = last + 1;
+	const startDate = settings?.startDate ?? "";
+	const nextStart = isISODate(startDate) ? workoutDateISO(startDate, next, "Mon") : null;
+	const nextInPast = nextStart !== null && addDaysISO(nextStart, 6) < data.today;
+
+	let out = `
+
+OPEN-ENDED TRAINING (rolling plan):
+This runner has no target race. The plan is extended a block at a time and never ends — never add a race day, taper or "Race Week" unless the runner tells you they have entered a race.
+The plan currently ends at Week ${last}.${nextStart ? ` The next new week is Week ${next}, starting Monday ${nextStart}.` : ""}
+Two optional additions to the plan-change block:
+- To ADD weeks after the end of the plan, give entries numbered ${next}, ${next + 1}, … with no gaps, each with a "phase" (e.g. "Recovery", "Progression", "Recovery Week", "Maintenance") and its full "days". Entries for weeks already in the plan work exactly as above.
+- To set or change the runner's objective, add a top-level "goal": {"text": "<one or two sentences>"}. It is saved when the runner applies the block.
+
+:::plan-change
+{"goal": {"text": "Run a sub-25:00 5K by March, 4 runs a week"}, "changes": [
+  {"week": ${next}, "phase": "Progression", "days": [
+    {"day": "Tue", "type": "Easy Run", "distance": 5, "notes": "Conversational"},
+    {"day": "Thu", "type": "Intervals", "distance": 6, "notes": "6×400m at 5K effort, 200m jog"},
+    {"day": "Sun", "type": "Long Run", "distance": 10, "notes": "Easy and steady"}
+  ]}
+], "summary": "New objective and the first week of the next block"}
+:::
+
+Rules for a new block: 3 weeks building then 1 lighter week, start from the runner's actual recent weekly volume (WEEKLY VOLUME above), grow no more than ~10% a week, and give a recently raced runner an easy first week.`;
+
+	if (nextInPast) {
+		out += `\nWeek ${next} is already in the past. Don't append weeks into the past — ask the runner to tap "Plan next 4 weeks" on the Plan page first (it fills the gap up to the current week), then adjust the new weeks.`;
+	}
+
+	if (!(settings?.goal ?? "").trim()) {
+		out += `
+
+OBJECTIVE NOT SET YET — ONBOARDING:
+The runner has just moved to open-ended training and hasn't told you what they want next. Before anything else, interview them briefly, one or two short questions at a time — never a questionnaire. Find out: what they want from the next couple of months (e.g. get faster at 5K or 10K, build weekly volume, simply stay consistent, a future race), how many days a week they can run and which days suit them, and any injuries or niggles. Use what you already see in their data instead of asking for it.
+Once you know enough (usually after two or three exchanges), propose the objective and the next block in ONE plan-change block: the "goal", the upcoming weeks already in the plan (current week onward, rewritten to suit the objective — full "days" for each), and any new weeks appended after Week ${last}. Explain the plan in a few sentences before the block and tell them to hit Apply.`;
+	}
+
+	return out;
+}
+
 /**
  * How to read the numbers above — kept separate from the plan-change protocol
  * so the two can be edited without disturbing each other.
@@ -499,8 +576,13 @@ When the data says the training should change, action it with a plan-change bloc
 export function buildCoachSystemPrompt(data: CoachData): string {
 	const raceDistance = data.plan?.settings.raceDistance ?? 21.1;
 	const targetPace = data.plan?.settings.targetPace ?? "";
+	const role = !isOpenMode(data.plan?.settings)
+		? `helping a beginner train for their ${raceLabel(raceDistance)} (${raceDistance}km)`
+		: isISODate(data.plan?.settings.raceDate)
+			? `helping a beginner keep training after their ${raceLabel(raceDistance)} (${raceDistance}km), with no target race on the calendar`
+			: `helping a beginner in open-ended training, with no target race on the calendar`;
 
-	return `You are an experienced, encouraging running coach helping a beginner train for their ${raceLabel(raceDistance)} (${raceDistance}km). You have access to their training plan and recent activity data below.
+	return `You are an experienced, encouraging running coach ${role}. You have access to their training plan and recent activity data below.
 
 Be concise, practical, and supportive. Give specific advice based on their actual data. If they report pain or injury, always err on the side of caution. Adjust recommendations based on their perceived effort and progress.
 
@@ -545,7 +627,7 @@ Rules for plan changes:
 - Include a "pace" field (string, format "M:SS" e.g. "6:00") for each workout with a suggested pace in min/km${targetPace ? `. The runner's target race pace is ${targetPace} min/km` : ""}
 - When asked to add paces to the plan, include ALL weeks in the plan-change block with appropriate paces for each workout type
 - Use "skips" (set skipped: true) when the runner can't do a specific planned workout but the plan itself shouldn't change — e.g. a one-off missed day from travel or a minor scheduling conflict. Use "skipped: false" in a "skips" entry to undo a previous skip
-- Days marked [SKIPPED] in the FULL PLAN below were deliberately skipped by the runner or coach — treat them as intentional, not as missed or a sign of poor adherence
+- Days marked [SKIPPED] in the FULL PLAN below were deliberately skipped by the runner or coach — treat them as intentional, not as missed or a sign of poor adherence${openModeProtocol(data)}
 
 ${COACH_GUIDANCE}
 

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 /** Tailwind's `lg` breakpoint — where the coach becomes a permanent sidebar. */
-const DESKTOP = "(min-width: 1024px)";
+export const DESKTOP = "(min-width: 1024px)";
 
 /**
  * `/coach` is the mobile way into the chat; at `lg:` the coach is already on

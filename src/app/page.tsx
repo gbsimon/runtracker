@@ -1,16 +1,32 @@
 import type { Metadata } from "next";
 import { HidePastWeeksToggle } from "@/components/hide-past-weeks";
+import { ExtendPlanCard, RaceDoneCard } from "@/components/open-plan-cards";
 import { PlanSettingsPanel } from "@/components/plan-settings-panel";
 import { PlanSetup } from "@/components/plan-setup";
 import { PlanWeekList } from "@/components/plan-week-list";
 import { getPlan } from "@/lib/plan";
-import { planSettingsDefaults, raceLabel, workoutKey } from "@/lib/plan-types";
+import { isOpenMode, planSettingsDefaults, raceLabel, workoutKey } from "@/lib/plan-types";
 import { listRuns, runDistanceKm } from "@/lib/runs";
-import { currentWeekNumber, formatFullDate, formatTotalTime, isISODate, todayISOInZone, weekDateRange } from "@/lib/running";
+import {
+	currentWeekNumber,
+	formatFullDate,
+	formatTotalTime,
+	isISODate,
+	planWeekOfISO,
+	todayISOInZone,
+	weekDateRange,
+} from "@/lib/running";
 import { requireUser } from "@/lib/session";
 import { userTimeZone } from "@/lib/today";
 
 export const metadata: Metadata = { title: "Plan · RunTracker" };
+
+/** The header has one line to spare for the objective; the coach sees all of it. */
+const HEADER_GOAL_CHARS = 60;
+
+function shortGoal(goal: string): string {
+	return goal.length > HEADER_GOAL_CHARS ? `${goal.slice(0, HEADER_GOAL_CHARS).trimEnd()}…` : goal;
+}
 
 export default async function PlanPage() {
 	const user = await requireUser();
@@ -37,16 +53,36 @@ export default async function PlanPage() {
 	);
 	const percent = totalWorkouts > 0 ? Math.round((completed / totalWorkouts) * 100) : 0;
 
+	const open = isOpenMode(plan.settings);
+	const goal = (plan.settings.goal ?? "").trim();
+	const raceName = raceLabel(plan.settings.raceDistance);
+	const raceDone = !open && isISODate(plan.settings.raceDate) && plan.settings.raceDate < today;
+	// Unclamped: `currentWeek` stops at the last week, the calendar doesn't.
+	const lastWeek = plan.weeks.reduce((max, week) => Math.max(max, week.week), 0);
+	const atPlanEnd = open && (planWeekOfISO(plan.settings.startDate, today) ?? 0) >= lastWeek;
+
 	return (
 		<section className="fade-in space-y-4">
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div>
 					<h2 className="text-lg font-bold text-white">Training Plan</h2>
-					<p className="text-sm text-gray-400">
-						{raceLabel(plan.settings.raceDistance)} • Week {currentWeek} of {plan.weeks.length} •{" "}
-						{weekDateRange(plan.settings.startDate, currentWeek)}
-						{isISODate(plan.settings.raceDate) ? ` • Race: ${formatFullDate(plan.settings.raceDate)}` : ""}
-					</p>
+					{open ? (
+						<p className="text-sm text-gray-400">
+							Ongoing training • Week {currentWeek} of {plan.weeks.length} •{" "}
+							{weekDateRange(plan.settings.startDate, currentWeek)}
+							{goal ? (
+								<span title={goal} className="block text-xs text-gray-500">
+									Objective: {shortGoal(goal)}
+								</span>
+							) : null}
+						</p>
+					) : (
+						<p className="text-sm text-gray-400">
+							{raceLabel(plan.settings.raceDistance)} • Week {currentWeek} of {plan.weeks.length} •{" "}
+							{weekDateRange(plan.settings.startDate, currentWeek)}
+							{isISODate(plan.settings.raceDate) ? ` • Race: ${formatFullDate(plan.settings.raceDate)}` : ""}
+						</p>
+					)}
 				</div>
 				<div className="flex gap-2">
 					{runs.length > 0 ? (
@@ -59,6 +95,9 @@ export default async function PlanPage() {
 					</span>
 				</div>
 			</div>
+
+			{raceDone ? <RaceDoneCard raceName={raceName} /> : null}
+			{atPlanEnd ? <ExtendPlanCard /> : null}
 
 			<div className="flex items-center justify-end">
 				<HidePastWeeksToggle hidden={plan.settings.hidePastWeeks} />
