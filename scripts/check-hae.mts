@@ -14,7 +14,9 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import {
+	deriveIntervals,
 	foldRunName,
+	type IntervalSegment,
 	isRunName,
 	MAX_EXTRA_RUN_FRAGMENTS,
 	normalizeRunFragments,
@@ -29,7 +31,7 @@ import {
 } from "../src/lib/ingest/hae.ts";
 import { findReconcileCandidate, type ReconcileCandidate } from "../src/lib/ingest/reconcile.ts";
 import { generateIngestToken, hashIngestToken } from "../src/lib/ingest/tokens.ts";
-import { energyKcal, maxSpeedPaceSPerKm, mergeRunMetrics, readRunMetrics } from "../src/lib/run-metrics.ts";
+import { energyKcal, maxSpeedPaceSPerKm, mergeRunMetrics, readRunMetrics, type RunMetrics } from "../src/lib/run-metrics.ts";
 import { fetchRunWeather, mergeWeather, needsRemoteWeather, type RunWeather } from "../src/lib/weather.ts";
 
 const FIXTURE = "fixtures/hae/real-payload-2026-08-17.json";
@@ -238,7 +240,7 @@ section("runs.metrics, read back and merged");
 {
 	// The same pair of numbers the Aug 15 run carries, stated here so the merge
 	// rules are checked on any machine rather than only where the capture is.
-	const measured = { energyKj: 5808.82, maxSpeedMs: 3.27 };
+	const measured: RunMetrics = { energyKj: 5808.82, maxSpeedMs: 3.27, effortScore: null };
 
 	// Reading back what the jsonb column holds.
 	eq("an empty object is not data", readRunMetrics({}), null);
@@ -254,6 +256,175 @@ section("runs.metrics, read back and merged");
 	const gap = mergeRunMetrics({ energyKj: 1 }, measured);
 	eq("only the missing field is written", gap.added.join(","), "maxSpeedMs");
 	eq("nothing to add is a no-op", mergeRunMetrics({ energyKj: 1 }, null).added.length, 0);
+
+	// Apple's effort score is one more gap the enrichment pass can fill.
+	eq("a stored row from before effortScore reads it as null", readRunMetrics({ energyKj: 1, maxSpeedMs: 2 })?.effortScore, null);
+	eq("an effort score alone is data", readRunMetrics({ effortScore: 8 })?.effortScore, 8);
+	const scored = mergeRunMetrics({ energyKj: 1, maxSpeedMs: 2 }, { ...measured, effortScore: 8 });
+	eq("Reprocess backfills only the effort score", scored.added.join(","), "effortScore");
+	eq("…with its value", scored.metrics?.effortScore, 8);
+	eq("…leaving the stored fields alone", scored.metrics?.energyKj, 1);
+	eq("a stored effort score is never overwritten", mergeRunMetrics({ effortScore: 5 }, { ...measured, effortScore: 8 }).metrics?.effortScore, 5);
+	// An incoming value shaped by an older build has no key at all — that is a gap, not `undefined` data.
+	const legacy = mergeRunMetrics({ energyKj: 1, maxSpeedMs: 2 }, { energyKj: 9, maxSpeedMs: 9 } as RunMetrics);
+	eq("an incoming value missing the key adds nothing", legacy.added.length, 0);
+	check("…and writes no undefined", legacy.metrics?.effortScore === null, JSON.stringify(legacy.metrics));
+}
+
+section("Apple effort score → runs.metrics");
+{
+	/** A minimal run carrying just the fields the metrics read. */
+	const metricsFor = (extra: Record<string, unknown>) =>
+		parseHaePayload({
+			data: {
+				workouts: [
+					{
+						id: "effort-1",
+						name: "Outdoor Run",
+						start: "2026-11-06 07:50:00 -0500",
+						end: "2026-11-06 08:20:00 -0500",
+						duration: 1800,
+						distance: { qty: 5, units: "km" },
+						walkingAndRunningDistance: [{ date: "2026-11-06 08:19:00 -0500", qty: 5 }],
+						...extra,
+					},
+				],
+			},
+		}).workouts[0]?.metrics ?? null;
+
+	eq("a rated workout carries its score", metricsFor({ effortScore: { qty: 8, units: "appleEffortScore" }, activeEnergyBurned: { qty: 1000 } })?.effortScore, 8);
+	eq("…beside the other metrics", metricsFor({ effortScore: { qty: 8 }, activeEnergyBurned: { qty: 1000 } })?.energyKj, 1000);
+	eq("a score alone still makes metrics", metricsFor({ effortScore: { qty: 6 } })?.effortScore, 6);
+	eq("a fractional score keeps one decimal", metricsFor({ effortScore: { qty: 7.46 } })?.effortScore, 7.5);
+	eq("an older payload without one reads null", metricsFor({ activeEnergyBurned: { qty: 1000 } })?.effortScore, null);
+	eq("no metrics at all is still null", metricsFor({}), null);
+	for (const [label, value] of [
+		["zero", { qty: 0 }],
+		["eleven", { qty: 11 }],
+		["negative", { qty: -3 }],
+		["a string", { qty: "8" }],
+		["garbage", "hard"],
+	] as const) {
+		eq(`an off-scale score (${label}) is dropped`, metricsFor({ effortScore: value, activeEnergyBurned: { qty: 1000 } })?.effortScore, null);
+	}
+	eq("…and alone it makes no metrics", metricsFor({ effortScore: { qty: 42 } }), null);
+}
+
+section("Intervals — HAE activities on a structured workout");
+{
+	const START = "2026-11-06 07:50:00 -0500";
+	const epoch = (stamp: string) => Math.round((parseHaeTimestamp(stamp) as { at: Date }).at.getTime() / 1000);
+
+	/** Shaped like the 2026-11-06 production capture: `{qty, units, origin}` metrics, non-ISO stamps. */
+	const activity = (index: number, start: string, end: string, metrics: Record<string, unknown>) => ({
+		id: `ACT-${index}`,
+		index,
+		start,
+		end,
+		metrics,
+	});
+	const warmup = activity(1, "2026-11-06 07:50:00 -0500", "2026-11-06 07:58:00 -0500", {
+		speed: { qty: 2.5223, units: "m/s", origin: "activeTimeCalculation" },
+		distance: { qty: 1207.09, units: "m", origin: "sampleOverlapEstimate", coveredDuration: 480 },
+		heartRateAverage: { qty: 147.88, units: "count/min" },
+		activeEnergy: { qty: 128.49, units: "kcal", origin: "sampleOverlapEstimate", coveredDuration: 613.6 },
+	});
+	const rep = activity(2, "2026-11-06 07:58:00 -0500", "2026-11-06 07:59:40 -0500", {
+		speed: { qty: 4, units: "m/s" },
+		distance: { qty: 400.4, units: "m" },
+		heartRateAverage: { qty: 171.4, units: "count/min" },
+	});
+	// No speed and no heart rate: the wall clock stands in, HR stays unknown.
+	const recovery = activity(3, "2026-11-06 07:59:40 -0500", "2026-11-06 08:01:40 -0500", {
+		distance: { qty: 200, units: "m" },
+	});
+
+	const workoutWith = (extra: Record<string, unknown>) => ({
+		data: {
+			workouts: [
+				{
+					id: "intervals-1",
+					name: "Outdoor Run",
+					start: START,
+					end: "2026-11-06 08:01:40 -0500",
+					duration: 700,
+					distance: { qty: 1.8075, units: "km" },
+					walkingAndRunningDistance: [
+						{ date: "2026-11-06 07:58:00 -0500", qty: 1.2071 },
+						{ date: "2026-11-06 08:01:40 -0500", qty: 0.6004 },
+					],
+					// Present on the new payloads and out of scope: read by nothing.
+					events: [{ type: "pause", date: "2026-11-06 07:59:00 -0500" }],
+					segments: [{ start: START }],
+					splits: [{ distance: { qty: 1000 } }],
+					source: "Apple Watch",
+					effortScore: { qty: 8, units: "appleEffortScore" },
+					...extra,
+				},
+			],
+		},
+	});
+	const parse = (extra: Record<string, unknown>) => parseHaePayload(workoutWith(extra));
+
+	// Out of order and with junk mixed in, which the parser must sort and shed.
+	const structured = parse({
+		activities: [recovery, warmup, 7, { ...rep, start: "06/11/2026 7:58 AM" }, rep, null],
+	});
+	const workout = structured.workouts[0];
+	eq("the structured workout is accepted", structured.workouts.length, 1);
+	const intervals = workout?.streams.intervals ?? [];
+	eq("three readable segments", intervals.length, 3);
+	eq("ordered by start time, numbered 1..n", intervals.map((segment) => segment.idx).join(","), "1,2,3");
+	eq(
+		"the warm-up verbatim",
+		JSON.stringify(intervals[0]),
+		JSON.stringify({ idx: 1, startT: epoch("2026-11-06 07:50:00 -0500"), t: epoch("2026-11-06 07:58:00 -0500"), distanceM: 1207, movingS: 479, paceSPerKm: 397, avgHr: 148 }),
+	);
+	eq("moving seconds are distance over active speed", intervals[1]?.movingS, 100);
+	eq("…metres rounded whole", intervals[1]?.distanceM, 400);
+	eq("…pace is moving pace", intervals[1]?.paceSPerKm, 250);
+	eq("…heart rate rounded", intervals[1]?.avgHr, 171);
+	eq("no speed falls back to the wall clock", intervals[2]?.movingS, 120);
+	eq("…and paces off it", intervals[2]?.paceSPerKm, 600);
+	eq("no heart rate is null, not zero", intervals[2]?.avgHr, null);
+	check("segments are stored in time order", intervals.every((segment, i) => i === 0 || segment.startT >= intervals[i - 1].startT));
+	eq(
+		"the intervals stream is stored",
+		workout ? workoutStreamRows(workout).some((row) => row.kind === "intervals") : false,
+		true,
+	);
+	eq("the out-of-scope fields change nothing else", workout?.streams.splits.length, 2);
+	eq("…and the effort score still reaches metrics", workout?.metrics?.effortScore, 8);
+
+	const kindsOf = (extra: Record<string, unknown>) => {
+		const parsed = parse(extra).workouts[0];
+		return parsed ? workoutStreamRows(parsed).map((row) => row.kind).sort().join(",") : "<skipped>";
+	};
+	eq("a single activity is the whole run: no stream", kindsOf({ activities: [warmup] }), "splits");
+	eq("absent activities: no stream", kindsOf({}), "splits");
+	eq("a non-array is ignored", kindsOf({ activities: { warmup } }), "splits");
+	eq("a string is ignored", kindsOf({ activities: "nope" }), "splits");
+	eq("an empty array is ignored", kindsOf({ activities: [] }), "splits");
+	eq("garbage entries are ignored", kindsOf({ activities: [1, "two", null, []] }), "splits");
+	eq(
+		"two entries with one unreadable is one segment, so nothing",
+		kindsOf({ activities: [warmup, { ...rep, end: "soon" }] }),
+		"splits",
+	);
+	eq("an entry that ends before it starts is dropped", deriveIntervals([warmup, { ...rep, end: "2026-11-06 07:57:00 -0500" }]).length, 0);
+
+	// The pure function, edge by edge.
+	const zeroSpeed = deriveIntervals([warmup, { ...rep, metrics: { speed: { qty: 0 }, distance: { qty: 400 } } }]);
+	eq("a zero speed falls back to the wall clock", zeroSpeed[1]?.movingS, 100);
+	const standing = deriveIntervals([warmup, { ...rep, metrics: { heartRateAverage: { qty: 120 } } }]);
+	eq("a segment with no distance is kept", standing.length, 2);
+	eq("…at zero metres", standing[1]?.distanceM, 0);
+	eq("…with no pace rather than a division by zero", standing[1]?.paceSPerKm, 0);
+	eq("…and its wall-clock time", standing[1]?.movingS, 100);
+	eq("a missing metrics object reads as empty", deriveIntervals([warmup, { start: rep.start, end: rep.end }])[1]?.avgHr, null);
+	eq("non-arrays give nothing", deriveIntervals(undefined).length + deriveIntervals({}).length + deriveIntervals("x").length, 0);
+	const keys: (keyof IntervalSegment)[] = ["avgHr", "distanceM", "idx", "movingS", "paceSPerKm", "startT", "t"];
+	eq("segment keys", Object.keys(intervals[0] ?? {}).sort().join(","), keys.join(","));
 }
 
 withFixture("Splits — derived per kilometre", ({ long, tempo }) => {

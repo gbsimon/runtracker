@@ -15,7 +15,7 @@ import { inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { runStreams } from "@/db/schema";
 import type { StreamKind } from "@/db/schema";
-import type { CadenceSample, HeartRateSample, RoutePoint, Split } from "./ingest/hae";
+import type { CadenceSample, HeartRateSample, IntervalSegment, RoutePoint, Split } from "./ingest/hae";
 
 export type RunStreamSet = {
 	route: RoutePoint[];
@@ -24,6 +24,8 @@ export type RunStreamSet = {
 	splits: Split[];
 	/** The post-run tail — feed it to `hrRecoveryStats`. */
 	hr_recovery: HeartRateSample[];
+	/** A structured workout's segments; absent on a steady run. */
+	intervals: IntervalSegment[];
 };
 
 function asArray<T>(value: unknown): T[] {
@@ -69,6 +71,9 @@ export async function loadRunStreams(
 				break;
 			case "hr_recovery":
 				streams.hr_recovery = asArray<HeartRateSample>(row.data);
+				break;
+			case "intervals":
+				streams.intervals = asArray<IntervalSegment>(row.data);
 				break;
 			default:
 				// `altitude` rides inside the route; anything newer is a row this

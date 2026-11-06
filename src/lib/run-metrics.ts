@@ -14,9 +14,19 @@ export type RunMetrics = {
 	energyKj: number | null;
 	/** Fastest instantaneous speed the watch recorded, metres per second. */
 	maxSpeedMs: number | null;
+	/**
+	 * Apple's own 1–10 effort rating for the workout — not the runner's typed
+	 * `runs.effort`. Absent on payloads from before HAE exported it, which reads
+	 * back as `null` like any other missing field.
+	 */
+	effortScore: number | null;
 };
 
-export const RUN_METRIC_KEYS = ["energyKj", "maxSpeedMs"] as const;
+export const RUN_METRIC_KEYS = ["energyKj", "maxSpeedMs", "effortScore"] as const;
+
+/** Apple's effort scale. Anything outside it is a unit or parsing accident, not a rating. */
+export const EFFORT_SCORE_MIN = 1;
+export const EFFORT_SCORE_MAX = 10;
 
 const KJ_PER_KCAL = 4.184;
 
@@ -32,6 +42,7 @@ export function readRunMetrics(raw: unknown): RunMetrics | null {
 	const metrics: RunMetrics = {
 		energyKj: finiteOrNull(stored.energyKj),
 		maxSpeedMs: finiteOrNull(stored.maxSpeedMs),
+		effortScore: finiteOrNull(stored.effortScore),
 	};
 	return RUN_METRIC_KEYS.some((key) => metrics[key] !== null) ? metrics : null;
 }
@@ -43,14 +54,21 @@ export function readRunMetrics(raw: unknown): RunMetrics | null {
  */
 export function mergeRunMetrics(existing: unknown, incoming: RunMetrics | null): { metrics: RunMetrics | null; added: (keyof RunMetrics)[] } {
 	const current = readRunMetrics(existing);
-	if (!incoming) return { metrics: current, added: [] };
+	// Normalized like the stored side, so an incoming value missing a newer key
+	// reads as `null` rather than slipping `undefined` past the gap check.
+	const fresh = readRunMetrics(incoming);
+	if (!fresh) return { metrics: current, added: [] };
 
-	const merged: RunMetrics = { energyKj: current?.energyKj ?? null, maxSpeedMs: current?.maxSpeedMs ?? null };
+	const merged: RunMetrics = {
+		energyKj: current?.energyKj ?? null,
+		maxSpeedMs: current?.maxSpeedMs ?? null,
+		effortScore: current?.effortScore ?? null,
+	};
 	const added: (keyof RunMetrics)[] = [];
 
 	for (const key of RUN_METRIC_KEYS) {
-		if (merged[key] === null && incoming[key] !== null) {
-			merged[key] = incoming[key];
+		if (merged[key] === null && fresh[key] !== null) {
+			merged[key] = fresh[key];
 			added.push(key);
 		}
 	}

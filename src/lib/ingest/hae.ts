@@ -11,7 +11,7 @@
  * follows.
  */
 
-import type { RunMetrics } from "../run-metrics";
+import { EFFORT_SCORE_MAX, EFFORT_SCORE_MIN, type RunMetrics } from "../run-metrics";
 import type { RunWeather } from "../weather";
 
 /** `2026-08-15 14:19:19 -0400` — not ISO-8601, so it gets its own parse. */
@@ -144,6 +144,29 @@ export type Split = {
 	partial?: true;
 };
 
+/**
+ * One segment of a structured workout — warm-up, rep, recovery or cool-down,
+ * in the order the watch ran them, with no guess at which is which. Taken from
+ * HAE's `activities`, which only carries real structure when there are two or
+ * more of them: a steady run arrives as a single activity spanning the whole
+ * workout, and is stored as no intervals at all.
+ */
+export type IntervalSegment = {
+	/** 1-based, by start time. */
+	idx: number;
+	/** Epoch seconds the segment started. */
+	startT: number;
+	/** Epoch seconds it ended. */
+	t: number;
+	/** Whole metres. */
+	distanceM: number;
+	/** Moving seconds — distance over the watch's active-time speed, wall clock when it gave none. */
+	movingS: number;
+	/** Moving pace; `0` for a segment that covered no distance. */
+	paceSPerKm: number;
+	avgHr: number | null;
+};
+
 export type ParsedStreams = {
 	route: RoutePoint[];
 	heart_rate: HeartRateSample[];
@@ -155,6 +178,8 @@ export type ParsedStreams = {
 	 * purpose — how fast that curve falls is the measurement.
 	 */
 	hr_recovery: HeartRateSample[];
+	/** Structured-workout segments — empty unless the workout had two or more. */
+	intervals: IntervalSegment[];
 };
 
 export type ParsedWorkout = {
@@ -179,7 +204,7 @@ export type ParsedWorkout = {
 	elevationGainM: number | null;
 	/** Seeded from the watch's own temperature/humidity when it recorded them. */
 	weather: RunWeather | null;
-	/** Energy and top speed, in SI — see `src/lib/run-metrics.ts`. */
+	/** Energy, top speed and Apple's effort score — see `src/lib/run-metrics.ts`. */
 	metrics: RunMetrics | null;
 	/** First GPS fix — what the Open-Meteo lookup is anchored to. */
 	firstPoint: { lat: number; lng: number } | null;
@@ -556,18 +581,74 @@ function deriveSplits(value: unknown, startSeconds: number, distanceCapM: number
 }
 
 /**
+ * HAE's `activities`: one entry per segment of the workout as the watch ran it.
+ *
+ * Only a workout with **two or more** readable segments is structured; a single
+ * activity is the whole run restated, and yields nothing. Each entry carries
+ * `start`/`end` in HAE's usual non-ISO stamp, and `metrics` whose `distance` is
+ * metres and whose `speed` is metres per second over the segment's *active*
+ * time — so `distance / speed` is the moving time, the same figure `splitS` is
+ * for a kilometre. Without a usable speed the wall clock stands in for it.
+ *
+ * Entries are ordered by their start time rather than by the payload's own
+ * `index`, and one whose timestamps don't read (or run backwards) is dropped
+ * rather than guessed at. `events`, `segments`, `splits` and `source` ride
+ * alongside on the same workout and are deliberately not read.
+ */
+export function deriveIntervals(value: unknown): IntervalSegment[] {
+	const segments: Omit<IntervalSegment, "idx">[] = [];
+
+	for (const activity of rows(value)) {
+		const startT = sampleSeconds(activity.start);
+		const t = sampleSeconds(activity.end);
+		if (startT === null || t === null || t < startT) continue;
+
+		const metrics = isRow(activity.metrics) ? activity.metrics : {};
+		const rawDistanceM = qty(metrics.distance);
+		const distanceM = rawDistanceM !== null && rawDistanceM > 0 ? Math.round(rawDistanceM) : 0;
+		const speedMs = qty(metrics.speed);
+		const movingS =
+			speedMs !== null && speedMs > 0 && rawDistanceM !== null && rawDistanceM > 0
+				? Math.round(rawDistanceM / speedMs)
+				: t - startT;
+		const avgHr = qty(metrics.heartRateAverage);
+
+		segments.push({
+			startT,
+			t,
+			distanceM,
+			movingS,
+			paceSPerKm: distanceM > 0 ? Math.round(movingS / (distanceM / 1000)) : 0,
+			avgHr: avgHr === null ? null : Math.round(avgHr),
+		});
+	}
+
+	if (segments.length < 2) return [];
+	return segments.sort((a, b) => a.startT - b.startT || a.t - b.t).map((segment, i) => ({ idx: i + 1, ...segment }));
+}
+
+/** Apple's 1–10 rating, or `null` when absent or off the scale. */
+function effortScore(value: unknown): number | null {
+	const score = qty(value);
+	if (score === null || score < EFFORT_SCORE_MIN || score > EFFORT_SCORE_MAX) return null;
+	return round(score, 1);
+}
+
+/**
  * `activeEnergyBurned` is kilojoules and `maxSpeed` is km/h — the latter
  * labelled `"km"`, which is why the units string plays no part. The route's own
  * per-point speeds are m/s and peak within a rounding error of `maxSpeed / 3.6`
- * on the captured runs, which is what pins the unit down.
+ * on the captured runs, which is what pins the unit down. `effortScore` is
+ * Apple's unitless 1–10 rating, kept only when it lands on that scale.
  */
 function workoutMetrics(workout: Row): RunMetrics | null {
 	const maxSpeedKmh = qty(workout.maxSpeed);
 	const metrics: RunMetrics = {
 		energyKj: round(qty(workout.activeEnergyBurned), 2),
 		maxSpeedMs: maxSpeedKmh === null ? null : (round(maxSpeedKmh / 3.6, 2) as number),
+		effortScore: effortScore(workout.effortScore),
 	};
-	return metrics.energyKj === null && metrics.maxSpeedMs === null ? null : metrics;
+	return metrics.energyKj === null && metrics.maxSpeedMs === null && metrics.effortScore === null ? null : metrics;
 }
 
 function appleWeather(workout: Row): RunWeather | null {
@@ -652,6 +733,7 @@ function parseWorkout(workout: Row, extraRunFragments: readonly string[]): Parse
 			cadence: deriveCadence(workout.stepCount, startSeconds),
 			splits,
 			hr_recovery: parseHeartRate(workout.heartRateRecovery),
+			intervals: deriveIntervals(workout.activities),
 		},
 	};
 }

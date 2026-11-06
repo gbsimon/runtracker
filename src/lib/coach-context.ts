@@ -1,5 +1,5 @@
 import { type DailyMetricsView, formatHours, getDailyMetrics } from "./daily-metrics";
-import type { HeartRateSample, RoutePoint, Split } from "./ingest/hae";
+import type { HeartRateSample, IntervalSegment, RoutePoint, Split } from "./ingest/hae";
 import { getPlan, type PlanRecord } from "./plan";
 import { isOpenMode, type PlanSettings, raceLabel, workoutKey } from "./plan-types";
 import { enrichSplits } from "./run-detail";
@@ -60,6 +60,11 @@ const LOAD_WEEKS = 8;
 const RECOVERY_DAYS = 7;
 /** A split table longer than this is a marathon; the tail stops earning its tokens. */
 const MAX_SPLIT_ROWS = 30;
+/**
+ * Room for 20 reps with their recoveries plus a warm-up and cool-down — a
+ * session longer than that is repeating itself.
+ */
+const MAX_INTERVAL_ROWS = 50;
 /** Below this a decoupling figure measures the warm-up, not the runner. */
 const MIN_DECOUPLING_MINUTES = 20;
 /** Drift past this on a steady run is the aerobic-base flag the guidance names. */
@@ -80,6 +85,19 @@ export type CoachSplit = {
 	avgHr: number | null;
 	elevationDeltaM: number | null;
 	partial: boolean;
+};
+
+/**
+ * One segment of a structured workout, in the order it was run. Deliberately
+ * unlabelled: which rows are reps and which are recoveries is plain from the
+ * numbers, and a guessed label that is wrong would be read as fact.
+ */
+export type CoachInterval = {
+	idx: number;
+	distanceM: number;
+	/** Moving pace; `0` when the segment covered no distance. */
+	paceSPerKm: number;
+	avgHr: number | null;
 };
 
 export type CoachDecoupling = {
@@ -108,6 +126,14 @@ export type RecentRun = LoggedRun & {
 	/** Present only on the two highlighted runs. */
 	splits: CoachSplit[] | null;
 	splitsTruncated: number;
+	/**
+	 * A structured workout's segments, on the highlighted runs only — like
+	 * `splits`. Absent on a steady run, which has no segments to show.
+	 */
+	intervals?: CoachInterval[] | null;
+	intervalsTruncated?: number;
+	/** Apple's own 1–10 effort rating, beside the runner's typed `effort`. */
+	watchEffort?: number | null;
 	/** Why this run got its splits — "long run" / "quality run". */
 	highlight: string | null;
 };
@@ -148,10 +174,21 @@ function paceLabel(run: LoggedRun): string {
 	return seconds > 0 ? formatDuration(seconds) : "?";
 }
 
-/** "5km in 30:00 (6:00/km, effort 5/10)" — v1's inline actuals. */
-function actuals(run: LoggedRun): string {
-	const effort = run.effort ? `, effort ${run.effort}/10` : "";
-	return `${formatKm(run.distanceKm)}km in ${formatDuration(run.durationS)} (${paceLabel(run)}/km${effort})`;
+/** `8`, or `7.5` — Apple's score isn't always a whole number. */
+function score(value: number): string {
+	return Number.isInteger(value) ? `${value}` : value.toFixed(1);
+}
+
+/**
+ * "5km in 30:00 (6:00/km, effort 5/10)" — v1's inline actuals. A recent run
+ * passes the watch's own rating too, which rides beside the runner's.
+ */
+function actuals(run: LoggedRun, watchEffort: number | null = null): string {
+	const effort = joinParts([
+		run.effort ? `effort ${run.effort}/10` : null,
+		watchEffort === null ? null : `watch effort ${score(watchEffort)}/10`,
+	]);
+	return `${formatKm(run.distanceKm)}km in ${formatDuration(run.durationS)} (${paceLabel(run)}/km${effort ? `, ${effort}` : ""})`;
 }
 
 function signed(value: number, digits = 1): string {
@@ -200,6 +237,20 @@ function renderSplits(run: RecentRun): string {
 	return out;
 }
 
+function renderIntervals(run: RecentRun): string {
+	if (!run.intervals || run.intervals.length === 0) return "";
+
+	let out = `    Intervals (n · distance · pace · avg HR):\n`;
+	for (const interval of run.intervals) {
+		out += `      ${interval.idx} ${(interval.distanceM / 1000).toFixed(2)}km ${
+			interval.paceSPerKm > 0 ? `${formatDuration(interval.paceSPerKm)}/km` : "pace n/a"
+		} ${interval.avgHr === null ? "no HR" : `${interval.avgHr}bpm`}\n`;
+	}
+	const truncated = run.intervalsTruncated ?? 0;
+	if (truncated > 0) out += `      …${truncated} further intervals omitted\n`;
+	return out;
+}
+
 function renderRecentRun(run: RecentRun): string {
 	const heading = joinParts([
 		`${run.dateISO} ${weekdayAbbrISO(run.dateISO)}`,
@@ -209,7 +260,7 @@ function renderRecentRun(run: RecentRun): string {
 	]);
 
 	let out = `  ${heading}\n`;
-	out += `    ${actuals(run)}\n`;
+	out += `    ${actuals(run, run.watchEffort ?? null)}\n`;
 
 	const body = joinParts([
 		run.avgHr === null ? null : `HR ${run.avgHr}avg${run.maxHr === null ? "" : `/${run.maxHr}max`} bpm`,
@@ -241,6 +292,7 @@ function renderRecentRun(run: RecentRun): string {
 
 	if (run.notes) out += `    Notes: "${run.notes}"\n`;
 	out += renderSplits(run);
+	out += renderIntervals(run);
 	return out;
 }
 
@@ -603,6 +655,7 @@ The context below carries real measurements, not estimates. Ground your advice i
 - HR recovery: the first-minute drop after stopping trends upward as fitness improves. Read it as a trend across runs, never off a single number.
 - Efficiency: metres per heartbeat rising at a matched heart rate is genuine aerobic progress; treat a "no trend yet" reason as missing data, not as stagnation.
 - Weather, cadence and climb explain a pace that looks slow on paper. Check them before suggesting that a run went badly — 28°C and 300m of climb are worth roughly a minute per kilometre.
+- Effort: "effort N/10" is what the runner typed; "watch effort N/10" is the Apple Watch's own rating. When the two disagree by more than a point or two, ask how the run felt before trusting either.
 - Weekly load is Edwards TRIMP in weighted minutes. Big week-on-week jumps matter more than the absolute number; note the HR coverage before leaning on a week's load.
 When the data says the training should change, action it with a plan-change block using the protocol above.`;
 
@@ -680,6 +733,33 @@ function isQualityType(type: string | null): boolean {
 	return QUALITY_TYPES.some((quality) => lower.includes(quality));
 }
 
+/** What choosing the two highlighted runs needs to know about a recent run. */
+export type HighlightCandidate = {
+	id: string;
+	distanceM: number;
+	/** What the plan asked for that day, when the day was planned. */
+	plannedType: string | null;
+	/** The watch recorded it as a structured workout. */
+	hasIntervals: boolean;
+};
+
+/**
+ * The two runs worth a per-kilometre table, from a window ordered newest
+ * first: the longest, and the most recent hard session that isn't it. A hard
+ * session is one the plan named as such, or one the watch recorded as a
+ * structured workout — an interval session run on an easy day, or on no plan
+ * day at all, is still the one whose detail the coach needs.
+ */
+export function pickHighlights(runs: readonly HighlightCandidate[]): { longestId: string | null; qualityId: string | null } {
+	const longest = runs.reduce<HighlightCandidate | null>(
+		(best, run) => (best === null || run.distanceM > best.distanceM ? run : best),
+		null,
+	);
+	const quality =
+		runs.find((run) => run.id !== longest?.id && (run.hasIntervals || isQualityType(run.plannedType))) ?? null;
+	return { longestId: longest?.id ?? null, qualityId: quality?.id ?? null };
+}
+
 /** ISO date → the workout the plan asked for that day. */
 function plannedTypesByDate(plan: PlanRecord | null): Map<string, string> {
 	const byDate = new Map<string, string>();
@@ -703,6 +783,16 @@ function toTrainingRuns(runs: RunRecord[], zone: string): TrainingRun[] {
 		avgHr: run.avgHr,
 		maxHr: run.maxHr,
 	}));
+}
+
+function toCoachIntervals(intervals: IntervalSegment[]): { rows: CoachInterval[]; truncated: number } {
+	const rows = intervals.slice(0, MAX_INTERVAL_ROWS).map((interval) => ({
+		idx: interval.idx,
+		distanceM: interval.distanceM,
+		paceSPerKm: interval.paceSPerKm,
+		avgHr: interval.avgHr,
+	}));
+	return { rows, truncated: Math.max(0, intervals.length - rows.length) };
 }
 
 function toCoachSplits(splits: Split[], route: RoutePoint[], heartRate: HeartRateSample[]): { rows: CoachSplit[]; truncated: number } {
@@ -746,27 +836,25 @@ export async function loadCoachData(userId: string, today: string, zone: string)
 		})
 		.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
 
-	// Splits and the recovery tail are ~2 kB a run; the route is not, so it is
-	// left out of this read entirely.
+	// Splits, intervals and the recovery tail are ~2 kB a run; the route is
+	// not, so it is left out of this read entirely.
 	const streams = await loadRunStreams(
 		window.map((run) => run.id),
-		["splits", "heart_rate", "hr_recovery"],
+		["splits", "heart_rate", "hr_recovery", "intervals"],
 	);
 
 	const planned = plannedTypesByDate(plan);
 
-	// The two runs worth a per-kilometre table: the longest, and the most
-	// recent hard session the plan named.
-	const longest = window.reduce<RunRecord | null>(
-		(best, run) => (best === null || run.distanceM > best.distanceM ? run : best),
-		null,
+	const { longestId, qualityId } = pickHighlights(
+		window.map((run) => ({
+			id: run.id,
+			distanceM: run.distanceM,
+			plannedType: planned.get(runLocalDateISO(run, zone)) ?? null,
+			hasIntervals: (streams.get(run.id)?.intervals?.length ?? 0) > 0,
+		})),
 	);
-	const quality =
-		window.find(
-			(run) => run.id !== longest?.id && isQualityType(planned.get(runLocalDateISO(run, zone)) ?? null),
-		) ?? null;
 
-	const highlightIds = [longest?.id, quality?.id].filter((id): id is string => typeof id === "string");
+	const highlightIds = [longestId, qualityId].filter((id): id is string => typeof id === "string");
 	const routes = highlightIds.length > 0 ? await loadRunStreams(highlightIds, ["route"]) : new Map();
 
 	const recent: RecentRun[] = window.map((run) => {
@@ -784,11 +872,13 @@ export async function loadCoachData(userId: string, today: string, zone: string)
 			decoupling = { driftPct: computed.driftPct, steady: computed.steady, reason: computed.reason };
 		}
 
-		const highlight = run.id === longest?.id ? "long run" : run.id === quality?.id ? "quality run" : null;
+		const highlight = run.id === longestId ? "long run" : run.id === qualityId ? "quality run" : null;
 		const table =
 			highlight && splits.length > 0
 				? toCoachSplits(splits, (routes.get(run.id) ?? {}).route ?? [], heartRate)
 				: null;
+		const intervals = series.intervals ?? [];
+		const segments = highlight && intervals.length > 0 ? toCoachIntervals(intervals) : null;
 
 		return {
 			dateISO,
@@ -810,6 +900,9 @@ export async function loadCoachData(userId: string, today: string, zone: string)
 			decoupling,
 			splits: table?.rows ?? null,
 			splitsTruncated: table?.truncated ?? 0,
+			intervals: segments?.rows ?? null,
+			intervalsTruncated: segments?.truncated ?? 0,
+			watchEffort: metrics?.effortScore ?? null,
 			highlight,
 		};
 	});

@@ -18,9 +18,10 @@ export type RunSource = "manual" | "apple_health";
 /**
  * `splits` is the derived per-kilometre series; `altitude` rides along in
  * `route`; `hr_recovery` is the post-run heart-rate decay the watch keeps
- * recording for about two minutes after the workout ends.
+ * recording for about two minutes after the workout ends; `intervals` is a
+ * structured workout's segments, stored only when there are two or more.
  */
-export type StreamKind = "route" | "heart_rate" | "altitude" | "cadence" | "splits" | "hr_recovery";
+export type StreamKind = "route" | "heart_rate" | "altitude" | "cadence" | "splits" | "hr_recovery" | "intervals";
 export type UserRole = "owner" | "member";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
@@ -125,7 +126,7 @@ export const runs = pgTable(
 		weather: jsonb("weather"),
 		/**
 		 * The watch measurements that don't each deserve a column —
-		 * `{energyKj, maxSpeedMs}` today. One jsonb keeps the next Tier-0 field
+		 * `{energyKj, maxSpeedMs, effortScore}` today. One jsonb keeps the next Tier-0 field
 		 * a parser change rather than a migration, the same bet `weather` makes.
 		 */
 		metrics: jsonb("metrics"),

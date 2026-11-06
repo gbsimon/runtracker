@@ -18,6 +18,8 @@ import {
 	buildCoachSystemPrompt,
 	type CoachData,
 	COACH_GUIDANCE,
+	type HighlightCandidate,
+	pickHighlights,
 	type RecentRun,
 } from "../src/lib/coach-context.ts";
 import {
@@ -280,6 +282,95 @@ section("Split table for the highlighted long run");
 	has("a partial split with gaps", context, "4(part) 6:12/km no HR climb n/a");
 	has("truncation is stated, not silent", context, "…2 further splits omitted");
 	check("only the highlighted run gets a table", count(context, "Per-km splits") === 1, `${count(context, "Per-km splits")} tables`);
+}
+
+section("Intervals for a structured workout");
+{
+	// An interval session on a day the plan didn't name — the watch's own
+	// segments, with km splits too, and Apple's effort beside the runner's.
+	const INTERVAL_RUN: RecentRun = {
+		...TEMPO_RUN,
+		dateISO: "2026-08-16",
+		time: "08:05",
+		plannedType: null,
+		effort: 8,
+		watchEffort: 8,
+		decoupling: null,
+		splits: [{ km: 1, paceSPerKm: 330, avgHr: 150, elevationDeltaM: 2, partial: false }],
+		splitsTruncated: 0,
+		intervals: [
+			{ idx: 1, distanceM: 1207, paceSPerKm: 397, avgHr: 148 },
+			{ idx: 2, distanceM: 400, paceSPerKm: 250, avgHr: 171 },
+			{ idx: 3, distanceM: 400, paceSPerKm: 336, avgHr: 162 },
+			{ idx: 4, distanceM: 0, paceSPerKm: 0, avgHr: null },
+		],
+		intervalsTruncated: 3,
+		highlight: "quality run",
+	};
+	const withIntervals = buildCoachContext({ ...DATA, recent: [INTERVAL_RUN, LONG_RUN, TEMPO_RUN] });
+
+	has("the run is headed as the quality highlight", withIntervals, "2026-08-16 Sun · 08:05 · [quality run]");
+	has("the block header", withIntervals, "    Intervals (n · distance · pace · avg HR):\n");
+	has("a warm-up row", withIntervals, "      1 1.21km 6:37/km 148bpm\n");
+	has("a rep row", withIntervals, "      2 0.40km 4:10/km 171bpm\n");
+	has("the row format from the spec", withIntervals, "      3 0.40km 5:36/km 162bpm\n");
+	has("a standing segment says so rather than dividing by zero", withIntervals, "      4 0.00km pace n/a no HR\n");
+	has("truncation is stated, not silent", withIntervals, "…3 further intervals omitted");
+	eq("both blocks on the run that has both", count(withIntervals, "Per-km splits"), 2);
+	eq("one intervals block, for the one run that has them", count(withIntervals, "Intervals (n ·"), 1);
+	check(
+		"the intervals block follows that run's own km table",
+		withIntervals.indexOf("Intervals (n ·") > withIntervals.indexOf("Per-km splits") &&
+			withIntervals.indexOf("Intervals (n ·") < withIntervals.indexOf("2026-08-15 Sat"),
+	);
+	eq("the base fixture's runs carry no intervals, and render no block", count(context, "Intervals (n ·"), 0);
+
+	// Apple's effort score rides beside the runner's own, on the recent run only.
+	has("watch effort beside the typed one", withIntervals, "5km in 30:00 (6:00/km, effort 8/10 · watch effort 8/10)");
+	const watchOnly = buildCoachContext({ ...DATA, recent: [{ ...INTERVAL_RUN, effort: null, watchEffort: 7.46 }] });
+	has("watch effort alone, one decimal", watchOnly, "5km in 30:00 (6:00/km, watch effort 7.5/10)");
+	eq("a run without a watch score reads exactly as before", count(context, "watch effort"), 0);
+	check(
+		"the FULL PLAN day lines never carry it",
+		!withIntervals.slice(withIntervals.indexOf("FULL PLAN")).includes("watch effort"),
+	);
+	has("guidance explains the two effort figures", prompt, '"watch effort N/10" is the Apple Watch\'s own rating');
+}
+
+section("Choosing the highlighted runs");
+{
+	const run = (id: string, distanceM: number, plannedType: string | null, hasIntervals = false): HighlightCandidate => ({
+		id,
+		distanceM,
+		plannedType,
+		hasIntervals,
+	});
+
+	// Newest first, as loadCoachData orders the window.
+	const planned = [run("easy", 5000, "Easy Run"), run("tempo", 6000, "Tempo Run"), run("long", 15_000, "Long Run")];
+	eq("the longest run", pickHighlights(planned).longestId, "long");
+	eq("the planned hard session, as before", pickHighlights(planned).qualityId, "tempo");
+
+	const unplanned = [run("loose", 5000, null, true), ...planned];
+	eq("an unplanned interval session is the quality run", pickHighlights(unplanned).qualityId, "loose");
+	eq(
+		"…and so is one run on an easy day",
+		pickHighlights([run("swapped", 5000, "Easy Run", true), ...planned]).qualityId,
+		"swapped",
+	);
+	eq(
+		"the most recent hard session still wins over an older interval run",
+		pickHighlights([run("tempo2", 6000, "Tempo Run"), run("older", 5000, null, true), run("long", 15_000, "Long Run")]).qualityId,
+		"tempo2",
+	);
+	eq(
+		"the longest run is never also the quality run, intervals or not",
+		pickHighlights([run("long", 15_000, null, true), run("easy", 5000, "Easy Run")]).qualityId,
+		null,
+	);
+	eq("no hard session and no intervals: no quality run", pickHighlights([run("a", 5000, "Easy Run"), run("b", 8000, null)]).qualityId, null);
+	const empty = pickHighlights([]);
+	eq("an empty window highlights nothing", `${empty.longestId}/${empty.qualityId}`, "null/null");
 }
 
 section("Weekly aggregates");
