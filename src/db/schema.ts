@@ -83,6 +83,21 @@ export const verificationTokens = pgTable(
 	(table) => [primaryKey({ columns: [table.identifier, table.token] })],
 );
 
+/**
+ * The numeric code sent alongside a magic link (see `src/lib/sign-in-code.ts`).
+ * One live code per address: a new request replaces the row. Holds only the
+ * code's HMAC and the link's callback URL encrypted under a key derived from
+ * `AUTH_SECRET` — never the code or the link token in clear.
+ */
+export const signInCodes = pgTable("sign_in_codes", {
+	identifier: text("identifier").primaryKey(),
+	codeHash: text("code_hash").notNull(),
+	encryptedUrl: text("encrypted_url").notNull(),
+	attempts: integer("attempts").notNull().default(0),
+	expires: timestamp("expires", { withTimezone: true, mode: "date" }).notNull(),
+	createdAt: createdAt(),
+});
+
 export const invites = pgTable("invites", {
 	id: id(),
 	token: text("token").notNull().unique(),

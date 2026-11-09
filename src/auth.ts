@@ -6,6 +6,7 @@ import { getDb } from "@/db";
 import { accounts, sessions, users, verificationTokens } from "@/db/schema";
 import { claimInvite, isSignInAllowed } from "@/lib/auth-access";
 import { authEmailFrom, sendMagicLink } from "@/lib/auth-email";
+import { clearSignInCodes } from "@/lib/sign-in-code-store";
 
 /**
  * Where Auth.js sends the browser after it accepts a magic-link request.
@@ -57,6 +58,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => ({
 		},
 	},
 	events: {
+		/**
+		 * The link was followed (tapped, or reached through the emailed code):
+		 * the code for that address is now useless, so don't leave it lying
+		 * around. Best effort — it expires on its own anyway.
+		 */
+		async signIn({ user }) {
+			if (!user.email) return;
+			await clearSignInCodes(user.email).catch((error: unknown) => {
+				console.error(`[auth] could not clear the sign-in code for ${user.email}: ${error instanceof Error ? error.message : String(error)}`);
+			});
+		},
 		/** Only fires for a first-time sign-in, i.e. exactly when an invite was spent. */
 		async createUser({ user }) {
 			if (user.email) await claimInvite(user.email);

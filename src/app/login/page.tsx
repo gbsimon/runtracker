@@ -45,7 +45,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
 					{sent ? null : invite ? (
 						<p className="mt-1.5 text-sm text-gray-400">You&apos;ve been invited. Confirm your email to get started.</p>
 					) : (
-						<p className="mt-1.5 text-sm text-gray-400">We&apos;ll email you a one-time link.</p>
+						<p className="mt-1.5 text-sm text-gray-400">We&apos;ll email you a one-time link and code.</p>
 					)}
 				</div>
 

@@ -51,7 +51,7 @@ export function LoginForm({ defaultEmail = "", callbackUrl = "/" }: { defaultEma
 			</div>
 			<SubmitButton />
 			<p className="text-center text-xs leading-relaxed text-gray-500">
-				RunTracker is invite-only. No passwords — you get a one-time link by email.
+				RunTracker is invite-only. No passwords — you get a one-time link and code by email.
 			</p>
 		</form>
 	);
