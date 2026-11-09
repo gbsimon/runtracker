@@ -29,13 +29,275 @@
 	--radius-3xl: 1.25rem;
 }
 
+/*
+ * Colour modes. The server puts `data-theme="auto|light|dark"` on <html> from
+ * the `theme` cookie; with nothing set it is dark, the app's original look.
+ * Dark values are the :root defaults; light overrides them under
+ * [data-theme="light"], and under "auto" when the system prefers light (CSS
+ * only, so there is no flash). The light block is written twice because a
+ * media query and an attribute selector cannot share one rule.
+ */
 @layer base {
-	html {
-		color-scheme: dark;
+	:root {
+	color-scheme: dark;
+
+	--body-bg: linear-gradient(145deg, #0a0a1a 0%, #0f1628 30%, #0d1117 60%, #080812 100%);
+	--body-glow:
+		radial-gradient(ellipse at 20% 0%, rgb(26 111 245 / 0.12) 0%, transparent 50%),
+		radial-gradient(ellipse at 80% 100%, rgb(26 60 160 / 0.08) 0%, transparent 50%);
+	--glass-bg: rgb(12 12 24 / 0.8);
+	--glass-border: rgb(255 255 255 / 0.08);
+	--card-bg: rgb(12 12 24 / 0.75);
+	--card-border: rgb(255 255 255 / 0.08);
+	--card-border-hover: rgb(255 255 255 / 0.12);
+	--card-shadow: none;
+	--glass-shadow: none;
+	--week-current-bg: linear-gradient(90deg, rgb(26 111 245 / 0.1), transparent);
+	--glow: 0 0 20px rgb(51 144 255 / 0.15), 0 0 60px rgb(51 144 255 / 0.05);
+	--glow-sm: 0 0 10px rgb(51 144 255 / 0.1);
+	--inset-bg: rgb(0 0 0 / 0.3);
+	--inset-bg-strong: rgb(0 0 0 / 0.4);
+
+	--input-bg: rgb(255 255 255 / 0.06);
+	--input-border: rgb(255 255 255 / 0.1);
+	--input-color: #e0e0f0;
+	--input-placeholder: rgb(255 255 255 / 0.25);
+	--input-focus-ring: 0 0 0 3px rgb(51 144 255 / 0.15), 0 0 15px rgb(51 144 255 / 0.1);
+	--option-bg: #1a1a2e;
+	--option-color: #e0e0f0;
+	--scroll-thumb: rgb(255 255 255 / 0.1);
+	--scroll-thumb-hover: rgb(255 255 255 / 0.2);
+	--selection: rgb(51 144 255 / 0.3);
+
+	--map-bg: #0c0c18;
+	--map-tile-filter: brightness(0.5) saturate(0.6) contrast(1.1);
+	--map-ctl-bg: rgb(12 12 24 / 0.85);
+	--map-ctl-bg-hover: rgb(26 26 46 / 0.95);
+	--map-ctl-border: rgb(255 255 255 / 0.1);
+	--map-ctl-color: #c0c0c0;
+	--map-ctl-color-hover: #fff;
+	--map-attr-bg: rgb(12 12 24 / 0.8);
+	--map-attr-color: rgb(255 255 255 / 0.45);
+	--map-attr-link: rgb(255 255 255 / 0.6);
+	--map-tooltip-bg: rgb(12 12 24 / 0.92);
+	--map-tooltip-border: rgb(255 255 255 / 0.12);
+	--map-tooltip-color: #e0e0f0;
+	--map-start: #34d399;
+	--map-pin-ring: #0c0c18;
+	--pace-1: #34d399;
+	--pace-2: #a3e635;
+	--pace-3: #fbbf24;
+	--pace-4: #fb923c;
+	--pace-5: #f87171;
+
+	--chart-elevation: #a78bfa;
+	--chart-heart-rate: #f87171;
+	--chart-cadence: #38bdf8;
+	--chart-grid: rgb(255 255 255 / 0.07);
+	--chart-cursor: rgb(255 255 255 / 0.35);
+	--chart-track: rgb(255 255 255 / 0.03);
 	}
 
+	:root[data-theme="light"] {
+	color-scheme: light;
+
+	/* Neutral scale remapped for a light page: whites become ink, greys darken. */
+	--color-white: #0f172a;
+	--color-gray-50: #0f172a;
+	--color-gray-100: #0f172a;
+	--color-gray-200: #1e293b;
+	--color-gray-300: #334155;
+	--color-gray-400: #475569;
+	--color-gray-500: #5b6678;
+	--color-gray-600: #6b7587;
+
+	/* Accent and status text, one step darker so it reads on white (AA). */
+	--color-brand-300: #1248b8;
+	--color-brand-400: #1459e1;
+	--color-red-300: #b91c1c;
+	--color-red-400: #c62828;
+	--color-red-500: #dc2626;
+	--color-rose-400: #be123c;
+	--color-amber-100: #78350f;
+	--color-amber-200: #7c2d12;
+	--color-amber-300: #92400e;
+	--color-amber-400: #a34a06;
+	--color-emerald-300: #047857;
+	--color-emerald-400: #047857;
+	--color-orange-400: #c2410c;
+	--color-sky-400: #0369a1;
+	--color-blue-400: #1d4ed8;
+	--color-purple-400: #7c3aed;
+	--color-teal-400: #0f766e;
+	--color-dark-800: #f4f6fb;
+
+	--body-bg: linear-gradient(160deg, #f9fbff 0%, #f3f6fc 45%, #eaeff8 100%);
+	--body-glow:
+		radial-gradient(ellipse at 20% 0%, rgb(26 111 245 / 0.07) 0%, transparent 50%),
+		radial-gradient(ellipse at 80% 100%, rgb(26 111 245 / 0.05) 0%, transparent 50%);
+	--glass-bg: rgb(255 255 255 / 0.82);
+	--glass-border: rgb(15 23 42 / 0.08);
+	--card-bg: rgb(255 255 255 / 0.92);
+	--card-border: rgb(15 23 42 / 0.08);
+	--card-border-hover: rgb(15 23 42 / 0.16);
+	--card-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 6px 20px rgb(15 23 42 / 0.04);
+	--glass-shadow: 0 1px 0 rgb(15 23 42 / 0.04), 0 4px 16px rgb(15 23 42 / 0.04);
+	--week-current-bg: linear-gradient(90deg, rgb(26 111 245 / 0.08), transparent);
+	--glow: 0 1px 2px rgb(15 23 42 / 0.06), 0 6px 24px rgb(26 111 245 / 0.14);
+	--glow-sm: 0 1px 2px rgb(26 111 245 / 0.25), 0 2px 8px rgb(26 111 245 / 0.18);
+	--inset-bg: rgb(15 23 42 / 0.06);
+	--inset-bg-strong: rgb(15 23 42 / 0.08);
+
+	--input-bg: #ffffff;
+	--input-border: rgb(15 23 42 / 0.16);
+	--input-color: #0f172a;
+	--input-placeholder: rgb(15 23 42 / 0.42);
+	--input-focus-ring: 0 0 0 3px rgb(51 144 255 / 0.18);
+	--option-bg: #ffffff;
+	--option-color: #0f172a;
+	--scroll-thumb: rgb(15 23 42 / 0.18);
+	--scroll-thumb-hover: rgb(15 23 42 / 0.3);
+	--selection: rgb(51 144 255 / 0.25);
+
+	--map-bg: #e5e9f0;
+	--map-tile-filter: none;
+	--map-ctl-bg: rgb(255 255 255 / 0.92);
+	--map-ctl-bg-hover: #ffffff;
+	--map-ctl-border: rgb(15 23 42 / 0.15);
+	--map-ctl-color: #334155;
+	--map-ctl-color-hover: #0f172a;
+	--map-attr-bg: rgb(255 255 255 / 0.8);
+	--map-attr-color: rgb(15 23 42 / 0.6);
+	--map-attr-link: #1459e1;
+	--map-tooltip-bg: rgb(255 255 255 / 0.96);
+	--map-tooltip-border: rgb(15 23 42 / 0.15);
+	--map-tooltip-color: #0f172a;
+	--map-start: #047857;
+	--map-pin-ring: #ffffff;
+	--pace-1: #059669;
+	--pace-2: #65a30d;
+	--pace-3: #d97706;
+	--pace-4: #ea580c;
+	--pace-5: #dc2626;
+
+	--chart-elevation: #7c3aed;
+	--chart-heart-rate: #dc2626;
+	--chart-cadence: #0284c7;
+	--chart-grid: rgb(15 23 42 / 0.09);
+	--chart-cursor: rgb(15 23 42 / 0.4);
+	--chart-track: rgb(15 23 42 / 0.05);
+	}
+
+	@media (prefers-color-scheme: light) {
+		:root[data-theme="auto"] {
+	color-scheme: light dark;
+
+	/* Neutral scale remapped for a light page: whites become ink, greys darken. */
+	--color-white: #0f172a;
+	--color-gray-50: #0f172a;
+	--color-gray-100: #0f172a;
+	--color-gray-200: #1e293b;
+	--color-gray-300: #334155;
+	--color-gray-400: #475569;
+	--color-gray-500: #5b6678;
+	--color-gray-600: #6b7587;
+
+	/* Accent and status text, one step darker so it reads on white (AA). */
+	--color-brand-300: #1248b8;
+	--color-brand-400: #1459e1;
+	--color-red-300: #b91c1c;
+	--color-red-400: #c62828;
+	--color-red-500: #dc2626;
+	--color-rose-400: #be123c;
+	--color-amber-100: #78350f;
+	--color-amber-200: #7c2d12;
+	--color-amber-300: #92400e;
+	--color-amber-400: #a34a06;
+	--color-emerald-300: #047857;
+	--color-emerald-400: #047857;
+	--color-orange-400: #c2410c;
+	--color-sky-400: #0369a1;
+	--color-blue-400: #1d4ed8;
+	--color-purple-400: #7c3aed;
+	--color-teal-400: #0f766e;
+	--color-dark-800: #f4f6fb;
+
+	--body-bg: linear-gradient(160deg, #f9fbff 0%, #f3f6fc 45%, #eaeff8 100%);
+	--body-glow:
+		radial-gradient(ellipse at 20% 0%, rgb(26 111 245 / 0.07) 0%, transparent 50%),
+		radial-gradient(ellipse at 80% 100%, rgb(26 111 245 / 0.05) 0%, transparent 50%);
+	--glass-bg: rgb(255 255 255 / 0.82);
+	--glass-border: rgb(15 23 42 / 0.08);
+	--card-bg: rgb(255 255 255 / 0.92);
+	--card-border: rgb(15 23 42 / 0.08);
+	--card-border-hover: rgb(15 23 42 / 0.16);
+	--card-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 6px 20px rgb(15 23 42 / 0.04);
+	--glass-shadow: 0 1px 0 rgb(15 23 42 / 0.04), 0 4px 16px rgb(15 23 42 / 0.04);
+	--week-current-bg: linear-gradient(90deg, rgb(26 111 245 / 0.08), transparent);
+	--glow: 0 1px 2px rgb(15 23 42 / 0.06), 0 6px 24px rgb(26 111 245 / 0.14);
+	--glow-sm: 0 1px 2px rgb(26 111 245 / 0.25), 0 2px 8px rgb(26 111 245 / 0.18);
+	--inset-bg: rgb(15 23 42 / 0.06);
+	--inset-bg-strong: rgb(15 23 42 / 0.08);
+
+	--input-bg: #ffffff;
+	--input-border: rgb(15 23 42 / 0.16);
+	--input-color: #0f172a;
+	--input-placeholder: rgb(15 23 42 / 0.42);
+	--input-focus-ring: 0 0 0 3px rgb(51 144 255 / 0.18);
+	--option-bg: #ffffff;
+	--option-color: #0f172a;
+	--scroll-thumb: rgb(15 23 42 / 0.18);
+	--scroll-thumb-hover: rgb(15 23 42 / 0.3);
+	--selection: rgb(51 144 255 / 0.25);
+
+	--map-bg: #e5e9f0;
+	--map-tile-filter: none;
+	--map-ctl-bg: rgb(255 255 255 / 0.92);
+	--map-ctl-bg-hover: #ffffff;
+	--map-ctl-border: rgb(15 23 42 / 0.15);
+	--map-ctl-color: #334155;
+	--map-ctl-color-hover: #0f172a;
+	--map-attr-bg: rgb(255 255 255 / 0.8);
+	--map-attr-color: rgb(15 23 42 / 0.6);
+	--map-attr-link: #1459e1;
+	--map-tooltip-bg: rgb(255 255 255 / 0.96);
+	--map-tooltip-border: rgb(15 23 42 / 0.15);
+	--map-tooltip-color: #0f172a;
+	--map-start: #047857;
+	--map-pin-ring: #ffffff;
+	--pace-1: #059669;
+	--pace-2: #65a30d;
+	--pace-3: #d97706;
+	--pace-4: #ea580c;
+	--pace-5: #dc2626;
+
+	--chart-elevation: #7c3aed;
+	--chart-heart-rate: #dc2626;
+	--chart-cadence: #0284c7;
+	--chart-grid: rgb(15 23 42 / 0.09);
+	--chart-cursor: rgb(15 23 42 / 0.4);
+	--chart-track: rgb(15 23 42 / 0.05);
+		}
+	}
+}
+
+/*
+ * White text on a brand-coloured fill stays white in every theme: the neutral
+ * scale above flips `text-white` to ink in light mode. A no-op in dark mode.
+ */
+.bg-brand-600.text-white,
+.bg-brand-500.text-white,
+.bg-amber-500\/80.text-white {
+	color: #fff;
+}
+
+.file\:text-white::file-selector-button {
+	color: #fff;
+}
+
+@layer base {
 	body {
-		background: linear-gradient(145deg, #0a0a1a 0%, #0f1628 30%, #0d1117 60%, #080812 100%);
+		background: var(--body-bg);
 		background-attachment: fixed;
 		isolation: isolate;
 	}
@@ -46,9 +308,7 @@
 		inset: 0;
 		z-index: 0;
 		pointer-events: none;
-		background:
-			radial-gradient(ellipse at 20% 0%, rgb(26 111 245 / 0.12) 0%, transparent 50%),
-			radial-gradient(ellipse at 80% 100%, rgb(26 60 160 / 0.08) 0%, transparent 50%);
+		background: var(--body-glow);
 	}
 
 	input[type="date"],
@@ -58,24 +318,22 @@
 	input[type="email"],
 	select,
 	textarea {
-		background: rgb(255 255 255 / 0.06);
-		border-color: rgb(255 255 255 / 0.1);
-		color: #e0e0f0;
+		background: var(--input-bg);
+		border-color: var(--input-border);
+		color: var(--input-color);
 		transition: all 0.15s;
 	}
 
 	input::placeholder,
 	textarea::placeholder {
-		color: rgb(255 255 255 / 0.25);
+		color: var(--input-placeholder);
 	}
 
 	input:focus,
 	select:focus,
 	textarea:focus {
 		border-color: #3390ff;
-		box-shadow:
-			0 0 0 3px rgb(51 144 255 / 0.15),
-			0 0 15px rgb(51 144 255 / 0.1);
+		box-shadow: var(--input-focus-ring);
 	}
 
 	input[type="range"],
@@ -84,8 +342,8 @@
 	}
 
 	option {
-		background: #1a1a2e;
-		color: #e0e0f0;
+		background: var(--option-bg);
+		color: var(--option-color);
 	}
 
 	/* `list-none` hides the marker everywhere except Safari. */
@@ -94,7 +352,7 @@
 	}
 
 	::selection {
-		background: rgb(51 144 255 / 0.3);
+		background: var(--selection);
 	}
 
 	::-webkit-scrollbar {
@@ -106,49 +364,58 @@
 	}
 
 	::-webkit-scrollbar-thumb {
-		background: rgb(255 255 255 / 0.1);
+		background: var(--scroll-thumb);
 		border-radius: 3px;
 	}
 
 	::-webkit-scrollbar-thumb:hover {
-		background: rgb(255 255 255 / 0.2);
+		background: var(--scroll-thumb-hover);
 	}
 }
 
 @utility glass {
-	background: rgb(12 12 24 / 0.8);
+	background: var(--glass-bg);
 	backdrop-filter: blur(24px);
 	-webkit-backdrop-filter: blur(24px);
-	border: 1px solid rgb(255 255 255 / 0.08);
+	border: 1px solid var(--glass-border);
+	box-shadow: var(--glass-shadow);
 	border-radius: var(--radius-2xl);
 }
 
 @utility card {
-	background: rgb(12 12 24 / 0.75);
+	background: var(--card-bg);
 	backdrop-filter: blur(20px);
 	-webkit-backdrop-filter: blur(20px);
-	border: 1px solid rgb(255 255 255 / 0.08);
+	border: 1px solid var(--card-border);
 	border-radius: var(--radius-2xl);
+	box-shadow: var(--card-shadow);
 
 	&:hover {
-		border-color: rgb(255 255 255 / 0.12);
+		border-color: var(--card-border-hover);
 	}
 }
 
 /* Declared after `card` so the accent wins on the current week's card. */
 @utility week-current {
 	border-left: 3px solid #3390ff;
-	background: linear-gradient(90deg, rgb(26 111 245 / 0.1), transparent);
+	background: var(--week-current-bg);
 }
 
 @utility glow {
-	box-shadow:
-		0 0 20px rgb(51 144 255 / 0.15),
-		0 0 60px rgb(51 144 255 / 0.05);
+	box-shadow: var(--glow);
 }
 
 @utility glow-sm {
-	box-shadow: 0 0 10px rgb(51 144 255 / 0.1);
+	box-shadow: var(--glow-sm);
+}
+
+/* Code/token wells: a dark scrim in dark mode, a faint ink wash in light. */
+@utility bg-inset {
+	background: var(--inset-bg);
+}
+
+@utility bg-inset-strong {
+	background: var(--inset-bg-strong);
 }
 
 @utility fade-in {
@@ -169,7 +436,7 @@
 /*
  * Leaflet wearing the app's theme (run detail view). The library ships light
  * styling and OSM's raster tiles are daylight-bright, so the tile pane is
- * dimmed to sit inside the dark glass rather than glare out of it — the filter
+ * dimmed in dark mode to sit inside the dark glass rather than glare out of it — the filter
  * is on the tile pane alone, leaving the route in the overlay pane above at
  * full colour. `isolation` keeps Leaflet's own z-indexes from reaching the
  * sticky header.
@@ -180,44 +447,44 @@
  * lose the tie on source order.
  */
 .run-map {
-	background: #0c0c18;
+	background: var(--map-bg);
 	isolation: isolate;
 }
 
 .run-map .leaflet-tile-pane {
-	filter: brightness(0.5) saturate(0.6) contrast(1.1);
+	filter: var(--map-tile-filter);
 }
 
 .run-map.leaflet-container .leaflet-control-attribution {
-	background: rgb(12 12 24 / 0.8);
-	color: rgb(255 255 255 / 0.45);
+	background: var(--map-attr-bg);
+	color: var(--map-attr-color);
 	font-size: 10px;
 	padding: 1px 6px;
 }
 
 .run-map.leaflet-container .leaflet-control-attribution a {
-	color: rgb(255 255 255 / 0.6);
+	color: var(--map-attr-link);
 }
 
 .run-map.leaflet-container .leaflet-control-zoom a {
-	background: rgb(12 12 24 / 0.85);
-	border-color: rgb(255 255 255 / 0.1);
-	color: #c0c0c0;
+	background: var(--map-ctl-bg);
+	border-color: var(--map-ctl-border);
+	color: var(--map-ctl-color);
 }
 
 .run-map.leaflet-container .leaflet-control-zoom a:hover {
-	background: rgb(26 26 46 / 0.95);
-	color: #fff;
+	background: var(--map-ctl-bg-hover);
+	color: var(--map-ctl-color-hover);
 }
 
 .run-map.leaflet-container .leaflet-tooltip {
-	background: rgb(12 12 24 / 0.92);
-	border: 1px solid rgb(255 255 255 / 0.12);
-	color: #e0e0f0;
+	background: var(--map-tooltip-bg);
+	border: 1px solid var(--map-tooltip-border);
+	color: var(--map-tooltip-color);
 	box-shadow: none;
 	font-size: 11px;
 }
 
 .run-map.leaflet-container .leaflet-tooltip-top::before {
-	border-top-color: rgb(255 255 255 / 0.12);
+	border-top-color: var(--map-tooltip-border);
 }

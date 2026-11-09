@@ -35,19 +35,19 @@ type MetricSpec = {
 const METRICS: MetricSpec[] = [
 	{
 		label: "Resting HR",
-		color: "#f87171",
+		color: "var(--chart-heart-rate)",
 		pick: (day) => day.restingHrBpm,
 		format: (value) => `${Math.round(value)} bpm`,
 	},
 	{
 		label: "HRV",
-		color: "#38bdf8",
+		color: "var(--chart-cadence)",
 		pick: (day) => day.hrvMs,
 		format: (value) => `${Math.round(value)} ms`,
 	},
 	{
 		label: "Sleep",
-		color: "#a78bfa",
+		color: "var(--chart-elevation)",
 		pick: (day) => day.sleep?.totalSleep ?? null,
 		format: (value) => formatHours(value) ?? "–",
 	},
@@ -106,7 +106,7 @@ function Sparkline({ readings, window, color }: { readings: Reading[]; window: {
 			role="presentation"
 			aria-hidden="true"
 		>
-			<rect x="0" y="0" width={SPARK_W} height={SPARK_H} rx="3" fill="#ffffff" fillOpacity="0.03" />
+			<rect x="0" y="0" width={SPARK_W} height={SPARK_H} rx="3" fill="var(--chart-track)" />
 			{segments.map((segment) =>
 				segment.length > 1 ? (
 					<polyline

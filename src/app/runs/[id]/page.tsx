@@ -24,7 +24,7 @@ import { userTimeZone } from "@/lib/today";
 
 const SOURCE_LABELS: Record<string, string> = { manual: "Manual", apple_health: "Apple Health" };
 
-const CHART_COLORS = { elevation: "#a78bfa", heartRate: "#f87171", cadence: "#38bdf8" };
+const CHART_COLORS = { elevation: "var(--chart-elevation)", heartRate: "var(--chart-heart-rate)", cadence: "var(--chart-cadence)" };
 
 /** Thousands separator, locale pinned so the server's HTML and the tab agree. */
 const COUNT_FORMAT = new Intl.NumberFormat("en-GB");

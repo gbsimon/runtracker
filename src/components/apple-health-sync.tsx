@@ -226,7 +226,7 @@ export function AppleHealthSync({
 				{tokenState.status === "created" && tokenState.token ? (
 					<div className="fade-in space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
 						<p className="text-sm font-semibold text-amber-200">Copy this now — it is never shown again</p>
-						<code className="block break-all rounded-lg bg-black/40 px-3 py-2 text-xs text-amber-100">{tokenState.token}</code>
+						<code className="block break-all rounded-lg bg-inset-strong px-3 py-2 text-xs text-amber-100">{tokenState.token}</code>
 						<p className="text-xs text-gray-400">
 							RunTracker only keeps a hash of it. Lose it and you generate a new one; nothing else breaks.
 						</p>
@@ -250,7 +250,7 @@ export function AppleHealthSync({
 						without you touching the phone.
 					</Step>
 					<Step n={3} title="Point it at RunTracker">
-						<div className="mt-1.5 space-y-1.5 rounded-lg bg-black/30 p-3">
+						<div className="mt-1.5 space-y-1.5 rounded-lg bg-inset p-3">
 							<Field label="URL" value={endpoint} />
 							<Field label="Method" value="POST" />
 							<Field label="Header" value="x-ingest-token: <your token above>" />
@@ -283,7 +283,7 @@ export function AppleHealthSync({
 						need an automation of their own.
 					</Step>
 					<Step n={2} title="Point it at the same place">
-						<div className="mt-1.5 space-y-1.5 rounded-lg bg-black/30 p-3">
+						<div className="mt-1.5 space-y-1.5 rounded-lg bg-inset p-3">
 							<Field label="URL" value={endpoint} />
 							<Field label="Method" value="POST" />
 							<Field label="Header" value="x-ingest-token: <the same token>" />

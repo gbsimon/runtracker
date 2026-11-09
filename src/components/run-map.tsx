@@ -18,7 +18,7 @@ import "leaflet/dist/leaflet.css";
  */
 
 /** Fastest → slowest. Green-to-red is what every runner already reads as pace. */
-const PACE_BAND_COLORS = ["#34d399", "#a3e635", "#fbbf24", "#fb923c", "#f87171"];
+const PACE_BAND_COLORS = ["var(--pace-1)", "var(--pace-2)", "var(--pace-3)", "var(--pace-4)", "var(--pace-5)"];
 /** Where GPS speed was unusable — a tunnel, a pause, a lost fix. */
 const NO_PACE_COLOR = "#64748b";
 
@@ -63,11 +63,11 @@ export function RunMap({ route }: { route: RouteDisplay }) {
 				}
 
 				const pin = (at: [number, number], fill: string, label: string) =>
-					L.circleMarker(at, { radius: 6, color: "#0c0c18", weight: 3, fillColor: fill, fillOpacity: 1 })
+					L.circleMarker(at, { radius: 6, color: "var(--map-pin-ring)", weight: 3, fillColor: fill, fillOpacity: 1 })
 						.addTo(map as LeafletMap)
 						.bindTooltip(label, { direction: "top", offset: [0, -8] });
 
-				pin(route.start, "#34d399", "Start");
+				pin(route.start, "var(--map-start)", "Start");
 				pin(route.finish, "#3390ff", "Finish");
 
 				map.fitBounds(route.bounds, { padding: [28, 28] });

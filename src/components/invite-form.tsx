@@ -46,7 +46,7 @@ export function InviteForm() {
 						{state.message ?? `Invite created for ${state.email}.`} Send them this link — or just tell them to sign in
 						with that address.
 					</p>
-					<code className="mt-2 block break-all rounded-lg bg-black/30 px-2.5 py-2 text-xs text-gray-300">
+					<code className="mt-2 block break-all rounded-lg bg-inset px-2.5 py-2 text-xs text-gray-300">
 						{state.link}
 					</code>
 				</div>

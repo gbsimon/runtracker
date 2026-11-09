@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { AppleHealthSync, type LastSyncView, type RecoveryItem, type TokenView } from "@/components/apple-health-sync";
 import { ChatSendKeySetting } from "@/components/chat-send-key-setting";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { DangerZone } from "@/components/danger-zone";
 import { ImportV1Form } from "@/components/import-v1-form";
 import { MaintenanceSweep, type SweepView } from "@/components/maintenance-sweep";
@@ -15,6 +16,7 @@ import { requireUser } from "@/lib/session";
 import { describeSweepRecord, readSweepStatus, type SweepRecord } from "@/lib/sweep";
 import { isIosUserAgent } from "@/lib/sync-now";
 import { userTimeZone } from "@/lib/today";
+import { normalizeTheme, THEME_COOKIE } from "@/lib/theme";
 import { requestOrigin } from "@/lib/urls";
 import { getUserPrefs } from "@/lib/user-prefs";
 
@@ -170,6 +172,7 @@ export default async function SettingsPage() {
 
 			<div className="card space-y-4 p-5">
 				<h3 className="text-sm font-semibold text-white">Preferences</h3>
+				<ThemeToggle initial={normalizeTheme((await cookies()).get(THEME_COOKIE)?.value)} />
 				<ChatSendKeySetting value={prefs.chatSendKey} />
 			</div>
 

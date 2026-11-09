@@ -168,7 +168,7 @@ export function StreamChart({
 								x2={VIEW_W}
 								y1={fraction * VIEW_H}
 								y2={fraction * VIEW_H}
-								stroke="rgb(255 255 255 / 0.07)"
+								stroke="var(--chart-grid)"
 								strokeWidth="1"
 								vectorEffect="non-scaling-stroke"
 							/>
@@ -206,7 +206,7 @@ export function StreamChart({
 								x2={toX(active.x)}
 								y1="0"
 								y2={VIEW_H}
-								stroke="rgb(255 255 255 / 0.35)"
+								stroke="var(--chart-cursor)"
 								strokeWidth="1"
 								vectorEffect="non-scaling-stroke"
 							/>

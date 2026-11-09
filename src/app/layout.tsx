@@ -1,12 +1,15 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import { Inter } from "next/font/google";
 import { redirect } from "next/navigation";
 import { isPublicPath } from "@/auth.config";
 import { CoachColumn } from "@/components/coach-column";
 import { CoachPanel } from "@/components/coach-panel";
 import { MainNav } from "@/components/main-nav";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { TimezoneSync } from "@/components/timezone-sync";
 import { UserMenu } from "@/components/user-menu";
+import { normalizeTheme, THEME_COLOR, THEME_COOKIE } from "@/lib/theme";
 import { unseenSkippedCount } from "@/lib/ingest/skipped";
 import { resolveUser } from "@/lib/session";
 import { userTimeZone } from "@/lib/today";
@@ -24,9 +27,24 @@ export const metadata: Metadata = {
 	description: "Race training plans, run logging, and an AI coach.",
 };
 
+/** Browser chrome (iOS status bar, Android toolbar) follows the chosen theme. */
+export async function generateViewport(): Promise<Viewport> {
+	const theme = normalizeTheme((await cookies()).get(THEME_COOKIE)?.value);
+	return {
+		themeColor:
+			theme === "auto"
+				? [
+						{ media: "(prefers-color-scheme: light)", color: THEME_COLOR.light },
+						{ media: "(prefers-color-scheme: dark)", color: THEME_COLOR.dark },
+					]
+				: THEME_COLOR[theme],
+	};
+}
+
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
 	const { hasSession, user } = await resolveUser();
 	const pathname = await currentPathname();
+	const theme = normalizeTheme((await cookies()).get(THEME_COOKIE)?.value);
 
 	// `proxy.ts` only verifies the token's signature. Every page renders through
 	// this layout, so it is the one place that can turn a token whose account no
@@ -39,7 +57,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 	const syncBadge = user && pathname !== "/sync" ? await unseenSkippedCount(user.id) : 0;
 
 	return (
-		<html lang="en" className={inter.variable}>
+		<html lang="en" className={inter.variable} data-theme={theme}>
 			<body className="min-h-screen font-sans text-gray-200 antialiased">
 				<header className="glass sticky top-0 z-50 rounded-none border-x-0 border-t-0">
 					<div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3.5">
@@ -49,7 +67,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 							</div>
 							<h1 className="text-base font-extrabold leading-tight tracking-tight text-white">RunTracker</h1>
 						</div>
-						{user?.email ? <UserMenu email={user.email} /> : null}
+						{user?.email ? <UserMenu email={user.email} theme={theme} /> : <ThemeToggle initial={theme} compact />}
 					</div>
 					{user ? <MainNav isOwner={user.role === "owner"} syncBadge={syncBadge} /> : null}
 				</header>
