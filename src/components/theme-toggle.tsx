@@ -1,33 +1,25 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { normalizeTheme, THEME_COLOR, THEME_COOKIE, THEME_OPTIONS, type ThemeMode } from "@/lib/theme";
+import { useEffect, useState } from "react";
+import { normalizeTheme, THEME_COOKIE, THEME_OPTIONS, type ThemeMode } from "@/lib/theme";
+
+/** Lets every mounted toggle (header + Settings) follow a change made in another. */
+const THEME_EVENT = "runtracker:theme";
 
 /**
  * Writes the cookie the server reads (see `lib/theme.ts`), then repaints
- * straight away: `data-theme` on <html> and the browser-chrome colour are
- * updated in place so there is no wait for the refresh that re-syncs the
- * server-rendered markup.
+ * straight away by setting `data-theme` on <html> (a plain attribute React
+ * re-applies to the same value on refresh). The <meta name="theme-color">
+ * tags are owned by Next's viewport export, so they are NOT touched by hand:
+ * removing them here made the post-refresh reconcile throw
+ * `removeChild` on null and kill the client tree. The `router.refresh()` in
+ * the caller re-renders them from the new cookie.
  */
 function applyTheme(mode: ThemeMode) {
 	document.cookie = `${THEME_COOKIE}=${mode}; path=/; max-age=31536000; samesite=lax`;
 	document.documentElement.dataset.theme = mode;
-
-	for (const meta of document.head.querySelectorAll('meta[name="theme-color"]')) meta.remove();
-	const add = (color: string, media?: string) => {
-		const meta = document.createElement("meta");
-		meta.name = "theme-color";
-		meta.content = color;
-		if (media) meta.media = media;
-		document.head.appendChild(meta);
-	};
-	if (mode === "auto") {
-		add(THEME_COLOR.light, "(prefers-color-scheme: light)");
-		add(THEME_COLOR.dark, "(prefers-color-scheme: dark)");
-	} else {
-		add(THEME_COLOR[mode]);
-	}
+	window.dispatchEvent(new CustomEvent(THEME_EVENT, { detail: mode }));
 }
 
 function currentTheme(initial: ThemeMode): ThemeMode {
@@ -75,6 +67,12 @@ function Icon({ mode }: { mode: ThemeMode }) {
 export function ThemeToggle({ initial, compact = false }: { initial: ThemeMode; compact?: boolean }) {
 	const router = useRouter();
 	const [mode, setMode] = useState<ThemeMode>(() => currentTheme(initial));
+
+	useEffect(() => {
+		const onChange = (event: Event) => setMode(normalizeTheme((event as CustomEvent<string>).detail));
+		window.addEventListener(THEME_EVENT, onChange);
+		return () => window.removeEventListener(THEME_EVENT, onChange);
+	}, []);
 
 	function choose(next: ThemeMode) {
 		setMode(next);
